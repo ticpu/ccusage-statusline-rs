@@ -8,7 +8,7 @@ High-performance statusline for Claude Code that displays real-time usage metric
 
 ## Features
 
-- ⚡ **Sub-millisecond performance** - 144x faster than Node.js implementation (1ms vs 144ms)
+- ⚡ **Ultra-fast performance** - 15x faster than Node.js implementation (8ms vs 120ms warm)
 - 💰 **Accurate cost tracking** - Fetches daily pricing from LiteLLM, supports tiered pricing
 - 🔄 **Smart caching** - XDG_RUNTIME_DIR-based caching with 24-hour pricing cache
 - 🎯 **5-hour block tracking** - Matches Claude's billing cycles exactly
@@ -42,9 +42,9 @@ Designed to be used as a Claude Code statusline hook. Add to your `~/.claude/set
 
 ## Performance
 
-- **Cold start**: ~144ms (first run, fetches pricing)
-- **Cached**: ~1ms (subsequent runs with valid cache)
-- **Node.js equivalent**: ~2,185ms (both cold and cached)
+- **Rust**: ~8ms average (consistent across all runs)
+- **Node.js warm**: ~120ms average (after JIT warmup)
+- **Speedup**: 15x faster
 
 ## License
 

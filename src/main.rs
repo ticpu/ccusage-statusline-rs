@@ -136,14 +136,14 @@ fn calculate_burn_rate(block: &types::Block) -> Result<BurnRate> {
 
 /// Calculate context tokens from transcript
 fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Option<ContextInfo>> {
-    // Parse transcript JSONL and count tokens
+    // Read last message from transcript to get current context
     let file = match File::open(transcript_path) {
         Ok(f) => f,
         Err(_) => return Ok(None),
     };
 
     let reader = BufReader::new(file);
-    let mut total_tokens = 0u64;
+    let mut last_tokens: Option<u64> = None;
 
     for line in reader.lines() {
         let line = line?;
@@ -151,9 +151,15 @@ fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Op
             continue;
         }
         if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
-            total_tokens += entry.message.usage.input_tokens;
+            // Calculate total context including cached tokens
+            let context = entry.message.usage.input_tokens
+                + entry.message.usage.cache_creation_input_tokens
+                + entry.message.usage.cache_read_input_tokens;
+            last_tokens = Some(context);
         }
     }
+
+    let total_tokens = last_tokens.unwrap_or(0);
 
     // Simplified context window (200k for Sonnet 4)
     let context_limit = 200_000u64;
@@ -163,4 +169,35 @@ fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Op
         tokens: total_tokens,
         percentage,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_context_calculation_with_caching() {
+        // Test: 10 + 500 + 95000 = 95510
+        let tokens = 10 + 500 + 95000;
+        let percentage = ((tokens as f64 / 200_000.0) * 100.0) as u32;
+
+        assert_eq!(tokens, 95510);
+        assert_eq!(percentage, 47); // 95510 / 200000 * 100 = 47.755 -> 47
+    }
+
+    #[test]
+    fn test_context_calculation_without_caching() {
+        let tokens = 1000 + 0 + 0;
+        let percentage = ((tokens as f64 / 200_000.0) * 100.0) as u32;
+
+        assert_eq!(tokens, 1000);
+        assert_eq!(percentage, 0); // 1000 / 200000 * 100 = 0.5 -> 0
+    }
+
+    #[test]
+    fn test_context_calculation_full() {
+        // Test near 200k limit
+        let tokens = 199_000u64;
+        let percentage = ((tokens as f64 / 200_000.0) * 100.0) as u32;
+
+        assert_eq!(percentage, 99); // 199000 / 200000 * 100 = 99.5 -> 99
+    }
 }

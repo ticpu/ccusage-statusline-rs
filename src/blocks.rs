@@ -7,6 +7,10 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
+const BLOCK_DURATION_HOURS: i64 = 5;
+const FILE_LOOKBACK_HOURS: i64 = 12; // Look back 12h to catch overlapping blocks
+const BUFREADER_CAPACITY: usize = 8192;
+
 /// Floor timestamp to the beginning of the hour in UTC
 fn floor_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
     timestamp
@@ -16,13 +20,13 @@ fn floor_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(timestamp)
 }
 
-/// Group usage entries into 5-hour blocks (matching TypeScript logic)
+/// Group usage entries into blocks (matching TypeScript logic)
 pub fn group_into_blocks(entries: &[UsageData], pricing: &PricingFetcher) -> Result<Vec<Block>> {
     if entries.is_empty() {
         return Ok(Vec::new());
     }
 
-    let session_duration_ms = 5 * 60 * 60 * 1000; // 5 hours in milliseconds
+    let session_duration_ms = BLOCK_DURATION_HOURS * 60 * 60 * 1000; // Block duration in milliseconds
     let mut blocks = Vec::new();
     let mut current_block_start: Option<DateTime<Utc>> = None;
     let mut current_block_entries: Vec<&UsageData> = Vec::new();
@@ -135,8 +139,13 @@ pub fn create_block_from_entries(
 
 /// Find active billing block
 pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> Result<Block> {
-    let mut all_entries = Vec::new();
-    let mut processed_hashes: HashSet<String> = HashSet::new();
+    let mut all_entries = Vec::with_capacity(1000);
+    let mut processed_hashes: HashSet<String> = HashSet::with_capacity(1000);
+
+    // Only process files modified within lookback window
+    let now = Utc::now();
+    let file_cutoff_time = now - Duration::hours(FILE_LOOKBACK_HOURS);
+    let file_cutoff_timestamp = file_cutoff_time.timestamp();
 
     // Collect all usage data from all projects
     for base_path in claude_paths {
@@ -152,9 +161,20 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
                     continue;
                 }
 
-                // Read JSONL file
+                // Skip files not modified within lookback window
+                if let Ok(metadata) = fs::metadata(&session_file) {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(modified_duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                            if (modified_duration.as_secs() as i64) < file_cutoff_timestamp {
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Read JSONL file with larger buffer
                 let file = File::open(&session_file)?;
-                let reader = BufReader::new(file);
+                let reader = BufReader::with_capacity(BUFREADER_CAPACITY, file);
 
                 for line in reader.lines() {
                     let line = line?;
@@ -163,17 +183,16 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
                     }
                     if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
                         // Create unique hash from message_id and request_id (matching TypeScript logic)
-                        let unique_hash = match (&entry.message.id, &entry.request_id) {
-                            (Some(msg_id), Some(req_id)) => Some(format!("{}:{}", msg_id, req_id)),
-                            _ => None,
-                        };
+                        if let (Some(msg_id), Some(req_id)) = (&entry.message.id, &entry.request_id) {
+                            let mut hash = String::with_capacity(msg_id.len() + req_id.len() + 1);
+                            hash.push_str(msg_id);
+                            hash.push(':');
+                            hash.push_str(req_id);
 
-                        // Skip duplicates (matching TypeScript deduplication)
-                        if let Some(hash) = &unique_hash {
-                            if processed_hashes.contains(hash) {
-                                continue; // Skip duplicate entry
+                            // Skip duplicates (matching TypeScript deduplication)
+                            if !processed_hashes.insert(hash) {
+                                continue; // Already exists, skip duplicate
                             }
-                            processed_hashes.insert(hash.clone());
                         }
 
                         all_entries.push(entry);
@@ -186,7 +205,7 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
     // Sort by timestamp
     all_entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
-    // Group into 5-hour blocks
+    // Group into billing blocks
     let blocks = group_into_blocks(&all_entries, pricing)?;
 
     // Find active block
@@ -206,7 +225,7 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
     // No active block found, return empty
     Ok(Block {
         start_time: now,
-        end_time: now + Duration::hours(5),
+        end_time: now + Duration::hours(BLOCK_DURATION_HOURS),
         cost_usd: 0.0,
         total_tokens: 0,
         is_active: false,

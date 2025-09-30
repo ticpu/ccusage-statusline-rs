@@ -1,7 +1,13 @@
 [package]
 name = "ccusage-statusline-rs"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
