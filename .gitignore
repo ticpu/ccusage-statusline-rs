@@ -1,2 +1,9 @@
 /target/
 Cargo.lock
+/*.tar.gz
+/*.tar.xz
+/src/*.tar.xz
+/pkg/
+/src/ccusage-statusline-rs-*/
+/*.pkg.tar.zst
+/*.deb
