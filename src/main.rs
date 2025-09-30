@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_context_calculation_without_caching() {
-        let tokens = 1000 + 0 + 0;
+        let tokens = 1000;
         let percentage = ((tokens as f64 / 200_000.0) * 100.0) as u32;
 
         assert_eq!(tokens, 1000);

@@ -162,14 +162,12 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
                 }
 
                 // Skip files not modified within lookback window
-                if let Ok(metadata) = fs::metadata(&session_file) {
-                    if let Ok(modified) = metadata.modified() {
-                        if let Ok(modified_duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-                            if (modified_duration.as_secs() as i64) < file_cutoff_timestamp {
-                                continue;
-                            }
-                        }
-                    }
+                if let Ok(metadata) = fs::metadata(&session_file)
+                    && let Ok(modified) = metadata.modified()
+                    && let Ok(modified_duration) = modified.duration_since(std::time::UNIX_EPOCH)
+                    && (modified_duration.as_secs() as i64) < file_cutoff_timestamp
+                {
+                    continue;
                 }
 
                 // Read JSONL file with larger buffer
@@ -183,7 +181,8 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
                     }
                     if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
                         // Create unique hash from message_id and request_id (matching TypeScript logic)
-                        if let (Some(msg_id), Some(req_id)) = (&entry.message.id, &entry.request_id) {
+                        if let (Some(msg_id), Some(req_id)) = (&entry.message.id, &entry.request_id)
+                        {
                             let mut hash = String::with_capacity(msg_id.len() + req_id.len() + 1);
                             hash.push_str(msg_id);
                             hash.push(':');

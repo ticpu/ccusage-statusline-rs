@@ -35,16 +35,23 @@ grep -Po '^version = "\K[^"]+' Cargo.toml
 
 To bump version:
 1. Edit version in `Cargo.toml` only
-2. Commit changes
-3. Tag with `git tag -as vX.Y.Z -m "Release vX.Y.Z"`
-4. **IMPORTANT**: Push commits AND tags: `git push && git push --tags`
+2. **CRITICAL**: Run `cargo fmt` and `cargo clippy --fix --allow-dirty` before committing (CI will fail otherwise)
+3. Commit changes
+4. Push commit: `git push`
+5. **CRITICAL**: Wait for CI to pass on master before creating tag
+6. Once CI passes, create tag: `git tag -as vX.Y.Z -m "Release vX.Y.Z"`
+7. Push tag: `git push --tags`
+
+**DO NOT push tags until CI passes on master. Failed builds will block releases.**
 
 ## Development Commands
 
 ### Code Quality
 
+**CRITICAL: Always run `cargo fmt` before committing. CI checks formatting and will fail if code is not formatted.**
+
 ```bash
-# Format code (run before commit)
+# Format code - MUST run before every commit
 cargo fmt
 
 # Run clippy with auto-fix
@@ -59,6 +66,12 @@ cargo test --message-format=short
 # Build release binary
 cargo build --release
 ```
+
+**Pre-commit checklist**:
+- [ ] `cargo fmt` - Code is formatted
+- [ ] `cargo clippy --fix --allow-dirty` - No clippy warnings
+- [ ] `cargo test` - All tests pass
+- [ ] `cargo build --release` - Release build succeeds
 
 ### Testing
 
