@@ -11,12 +11,21 @@ use chrono::Utc;
 use format::{format_block_info, format_burn_rate, format_context};
 use pricing::PricingFetcher;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read};
 use std::path::PathBuf;
 use types::{BurnRate, ContextInfo, HookData, UsageData};
 
 fn main() -> Result<()> {
-    // Read input from stdin
+    let stdin = io::stdin();
+
+    if stdin.is_terminal() {
+        run_interactive_mode()
+    } else {
+        run_piped_mode()
+    }
+}
+
+fn run_piped_mode() -> Result<()> {
     let mut input = String::new();
     io::stdin()
         .read_to_string(&mut input)
@@ -29,24 +38,37 @@ fn main() -> Result<()> {
 
     let hook_data: HookData = serde_json::from_str(&input).context("Failed to parse JSON input")?;
 
-    // Get cache directory from XDG_RUNTIME_DIR
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
     let cache_path = cache_dir.join(format!("{}.lock", hook_data.session_id));
 
-    // Try to get cached output
     if let Some(cached) = try_get_cached(&cache_path, &hook_data.transcript_path)? {
         println!("{}", cached);
         return Ok(());
     }
 
-    // Generate fresh output
     let output = generate_statusline(&hook_data)?;
     println!("{}", output);
 
-    // Update cache
     update_cache(&cache_path, &hook_data.transcript_path, &output)?;
+
+    Ok(())
+}
+
+fn run_interactive_mode() -> Result<()> {
+    let cache_dir = get_cache_dir()?;
+    fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
+
+    let pricing = PricingFetcher::new(&cache_dir)?;
+    let claude_paths = find_claude_paths()?;
+    let block = find_active_block(&claude_paths, &pricing)?;
+    let burn_rate = calculate_burn_rate(&block)?;
+
+    let block_info = format_block_info(&block);
+    let burn_info = format_burn_rate(&burn_rate);
+
+    println!("💰 {} | 🔥 {}", block_info, burn_info);
 
     Ok(())
 }
