@@ -2,7 +2,7 @@ use crate::pricing::PricingFetcher;
 use crate::types::{Block, UsageData};
 use anyhow::Result;
 use chrono::{DateTime, Duration, Timelike, Utc};
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;

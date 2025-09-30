@@ -1,5 +1,5 @@
 PKGNAME = ccusage-statusline-rs
-VERSION = 1.0.0
+VERSION = $(shell grep -Po '^version = "\K[^"]+' Cargo.toml)
 TARBALL = $(PKGNAME)-$(VERSION).tar.xz
 
 .PHONY: all tarball package install clean
