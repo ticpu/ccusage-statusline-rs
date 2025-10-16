@@ -8,12 +8,15 @@ url="https://github.com/ticpu/ccusage-statusline-rs"
 license=('MIT')
 depends=('gcc-libs')
 makedepends=('cargo')
+options=('!lto')
 source=("$pkgname-$pkgver.tar.xz::https://github.com/ticpu/$pkgname/archive/v$pkgver.tar.xz")
 sha256sums=('SKIP')
 
 build() {
     cd "$pkgname-$pkgver"
-    cargo build --release
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --release --locked
 }
 
 check() {
