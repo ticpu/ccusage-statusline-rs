@@ -20,6 +20,11 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Read};
 use std::path::PathBuf;
 use types::{BurnRate, ContextInfo, HookData, UsageData};
 
+/// Effective context limit accounting for prompt caching compaction.
+/// Nominal Sonnet 4 limit is 200k, but Claude compacts context before reaching 100%,
+/// so we use 150k as the effective limit for percentage calculations.
+const EFFECTIVE_CONTEXT_LIMIT: u64 = 150_000;
+
 fn main() -> Result<()> {
     let stdin = io::stdin();
 
@@ -78,10 +83,10 @@ fn run_interactive_mode() -> Result<()> {
     let block_info = format_block_info(&block, &api_usage);
     let burn_info = format_burn_rate(&burn_rate);
 
-    let mut output = format!("💰 {} | 🔥 {}", block_info, burn_info);
+    let mut output = format!("💰{} │ 🔥{}", block_info, burn_info);
 
     if let Some(api_str) = format_api_usage(&api_usage) {
-        output.push_str(&format!(" | 📊 {}", api_str));
+        output.push_str(&format!(" │ 📊{}", api_str));
     }
 
     println!("{}", output);
@@ -121,12 +126,12 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
 
     // Build output with optional API usage
     let mut output = format!(
-        "🤖 {} | 💰 {} | 🔥 {} | 🧠 {}",
+        "🤖{} │ 💰{} │ 🔥{} │ 🧠{}",
         hook_data.model.display_name, block_info, burn_info, context_str
     );
 
     if let Some(api_str) = format_api_usage(&api_usage) {
-        output.push_str(&format!(" | 📊 {}", api_str));
+        output.push_str(&format!(" │ 📊{}", api_str));
     }
 
     Ok(output)
@@ -210,9 +215,8 @@ fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Op
 
     let total_tokens = last_tokens.unwrap_or(0);
 
-    // Simplified context window (200k for Sonnet 4)
-    let context_limit = 200_000u64;
-    let percentage = ((total_tokens as f64 / context_limit as f64) * 100.0) as u32;
+    let percentage =
+        ((total_tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
     Ok(Some(ContextInfo {
         tokens: total_tokens,
@@ -222,31 +226,36 @@ fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Op
 
 #[cfg(test)]
 mod tests {
+    use super::EFFECTIVE_CONTEXT_LIMIT;
+
     #[test]
     fn test_context_calculation_with_caching() {
         // Test: 10 + 500 + 95000 = 95510
         let tokens = 10 + 500 + 95000;
-        let percentage = ((tokens as f64 / 200_000.0) * 100.0) as u32;
+        let percentage =
+            ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
         assert_eq!(tokens, 95510);
-        assert_eq!(percentage, 47); // 95510 / 200000 * 100 = 47.755 -> 47
+        assert_eq!(percentage, 63); // 95510 / 150000 * 100 = 63.67 -> 63
     }
 
     #[test]
     fn test_context_calculation_without_caching() {
         let tokens = 1000;
-        let percentage = ((tokens as f64 / 200_000.0) * 100.0) as u32;
+        let percentage =
+            ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
         assert_eq!(tokens, 1000);
-        assert_eq!(percentage, 0); // 1000 / 200000 * 100 = 0.5 -> 0
+        assert_eq!(percentage, 0); // 1000 / 150000 * 100 = 0.67 -> 0
     }
 
     #[test]
-    fn test_context_calculation_full() {
-        // Test near 200k limit
+    fn test_context_calculation_capped() {
+        // Test that percentage caps at 100%
         let tokens = 199_000u64;
-        let percentage = ((tokens as f64 / 200_000.0) * 100.0) as u32;
+        let percentage =
+            ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
-        assert_eq!(percentage, 99); // 199000 / 200000 * 100 = 99.5 -> 99
+        assert_eq!(percentage, 100); // 199000 / 150000 * 100 = 132.67 -> capped at 100
     }
 }

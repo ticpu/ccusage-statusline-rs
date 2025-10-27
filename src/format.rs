@@ -1,11 +1,12 @@
 use crate::types::{ApiUsageData, Block, BurnRate, ContextInfo};
 use chrono::Utc;
+use num_format::{Locale, ToFormattedString};
 use owo_colors::OwoColorize;
 
 /// Format block information (use API timing if available, more accurate)
 pub fn format_block_info(block: &Block, api_usage: &Option<ApiUsageData>) -> String {
     if !block.is_active {
-        return "No active block".to_string();
+        return "No block".to_string();
     }
 
     let now = Utc::now();
@@ -24,7 +25,7 @@ pub fn format_block_info(block: &Block, api_usage: &Option<ApiUsageData>) -> Str
     let hours = remaining / 60;
     let mins = remaining % 60;
 
-    format!("${:.2} block ({}h {}m left)", block.cost_usd, hours, mins)
+    format!("{} ({}h{}m)", format_currency(block.cost_usd), hours, mins)
 }
 
 /// Format burn rate with emoji indicator
@@ -37,38 +38,35 @@ pub fn format_burn_rate(burn_rate: &BurnRate) -> String {
         "🚨".red().to_string()
     };
 
-    format!("${:.2}/hr {}", burn_rate.cost_per_hour, emoji)
+    format!("{}/h {}", format_currency(burn_rate.cost_per_hour), emoji)
 }
 
 /// Format context information
 pub fn format_context(context: &Option<ContextInfo>) -> String {
     match context {
         Some(info) => {
-            let color = if info.percentage < 70 {
+            let color = if info.percentage < 50 {
                 info.percentage.to_string().green().to_string()
-            } else if info.percentage < 90 {
+            } else if info.percentage < 70 {
                 info.percentage.to_string().yellow().to_string()
             } else {
                 info.percentage.to_string().red().to_string()
             };
 
-            format!("{} ({}%)", format_number(info.tokens), color)
+            format!("{}({}%)", format_number(info.tokens), color)
         }
         None => "N/A".to_string(),
     }
 }
 
-/// Format number with thousand separators
+/// Format number with locale-based thousand separators
 pub fn format_number(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
+    n.to_formatted_string(&Locale::en)
+}
+
+/// Format currency with locale-based formatting
+pub fn format_currency(amount: f64) -> String {
+    format!("${:.2}", amount)
 }
 
 /// Format API usage data
