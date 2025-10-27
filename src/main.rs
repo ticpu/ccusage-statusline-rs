@@ -1,5 +1,7 @@
+mod api_usage;
 mod blocks;
 mod cache;
+mod firefox;
 mod format;
 mod pricing;
 mod types;
@@ -8,7 +10,7 @@ use anyhow::{Context, Result};
 use blocks::find_active_block;
 use cache::{get_cache_dir, try_get_cached, update_cache};
 use chrono::Utc;
-use format::{format_block_info, format_burn_rate, format_context};
+use format::{format_api_usage, format_block_info, format_burn_rate, format_context};
 use pricing::PricingFetcher;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read};
@@ -59,25 +61,32 @@ fn run_piped_mode() -> Result<()> {
 fn run_interactive_mode() -> Result<()> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
+    let api_usage = api_usage::fetch_usage();
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
     let block = find_active_block(&claude_paths, &pricing)?;
     let burn_rate = calculate_burn_rate(&block)?;
 
-    let block_info = format_block_info(&block);
+    let block_info = format_block_info(&block, &api_usage);
     let burn_info = format_burn_rate(&burn_rate);
 
-    println!("💰 {} | 🔥 {}", block_info, burn_info);
+    let mut output = format!("💰 {} | 🔥 {}", block_info, burn_info);
+
+    if let Some(api_str) = format_api_usage(&api_usage) {
+        output.push_str(&format!(" | 📊 {}", api_str));
+    }
+
+    println!("{}", output);
 
     Ok(())
 }
 
 /// Generate statusline output
 fn generate_statusline(hook_data: &HookData) -> Result<String> {
-    // Get cache directory for pricing data
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
+    let api_usage = api_usage::fetch_usage();
 
     // Initialize pricing fetcher (loads or fetches LiteLLM pricing)
     let pricing = PricingFetcher::new(&cache_dir)?;
@@ -95,14 +104,21 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let context_info = calculate_context_tokens(&hook_data.transcript_path, &hook_data.model.id)?;
 
     // Format output
-    let block_info = format_block_info(&block);
+    let block_info = format_block_info(&block, &api_usage);
     let burn_info = format_burn_rate(&burn_rate);
     let context_str = format_context(&context_info);
 
-    Ok(format!(
+    // Build output with optional API usage
+    let mut output = format!(
         "🤖 {} | 💰 {} | 🔥 {} | 🧠 {}",
         hook_data.model.display_name, block_info, burn_info, context_str
-    ))
+    );
+
+    if let Some(api_str) = format_api_usage(&api_usage) {
+        output.push_str(&format!(" | 📊 {}", api_str));
+    }
+
+    Ok(output)
 }
 
 /// Find Claude data directories

@@ -159,3 +159,11 @@ pub struct ContextInfo {
     pub tokens: u64,
     pub percentage: u32,
 }
+
+/// API usage data from claude.ai
+#[derive(Debug, Clone)]
+pub struct ApiUsageData {
+    pub five_hour_percent: u32,
+    pub five_hour_resets_at: Option<DateTime<Utc>>,
+    pub seven_day_percent: u32,
+}

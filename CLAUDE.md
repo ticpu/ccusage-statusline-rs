@@ -1,210 +1,147 @@
 # CLAUDE.md
 
-Development guide for Claude Code when working on ccusage-statusline-rs.
+Developer quick-start for ccusage-statusline-rs. Rust implementation of Claude Code usage statusline with live API integration.
 
-## Project Overview
-
-Ultra-fast Rust implementation of Claude Code usage statusline. Provides 8ms average performance (15x faster than warm Node.js) for real-time usage tracking with accurate cost calculation.
-
-## Repository Structure
-
-```
-.
-├── src/
-│   ├── main.rs       # Entry point and statusline generation
-│   ├── types.rs      # All struct definitions and implementations
-│   ├── pricing.rs    # LiteLLM pricing fetcher with caching
-│   ├── blocks.rs     # 5-hour billing block logic and deduplication
-│   ├── cache.rs      # Semaphore-based output caching
-│   └── format.rs     # Output formatting functions
-├── .github/workflows/
-│   ├── ci.yml        # CI workflow for master branch
-│   └── release.yml   # Release workflow for tags
-├── Cargo.toml        # Single source of truth for version
-├── PKGBUILD         # Arch Linux package (auto-extracts version)
-└── Makefile         # Build automation (auto-extracts version)
-```
-
-## Version Management
-
-**IMPORTANT**: Version is managed in `Cargo.toml` only. Both `PKGBUILD` and `Makefile` automatically extract the version using:
+## Quick Start
 
 ```bash
-grep -Po '^version = "\K[^"]+' Cargo.toml
-```
-
-To bump version:
-1. Edit version in `Cargo.toml` only
-2. **CRITICAL**: Run `cargo fmt` and `cargo clippy --fix --allow-dirty` before committing (CI will fail otherwise)
-3. Commit changes
-4. Push commit: `git push`
-5. **CRITICAL**: Wait for CI to pass on master before creating tag
-6. Once CI passes, create tag: `git tag -as vX.Y.Z -m "Release vX.Y.Z"`
-7. Push tag: `git push --tags`
-
-**DO NOT push tags until CI passes on master. Failed builds will block releases.**
-
-## Development Commands
-
-### Code Quality
-
-**CRITICAL: Always run `cargo fmt` before committing. CI checks formatting and will fail if code is not formatted.**
-
-```bash
-# Format code - MUST run before every commit
-cargo fmt
-
-# Run clippy with auto-fix
-cargo clippy --fix --allow-dirty --message-format=short
-
-# Type check (faster than build)
+# Build and test
+cargo fmt && cargo clippy --fix --allow-dirty
 cargo check --message-format=short
-
-# Run tests
 cargo test --message-format=short
-
-# Build release binary
 cargo build --release
-```
 
-**Pre-commit checklist**:
-- [ ] `cargo fmt` - Code is formatted
-- [ ] `cargo clippy --fix --allow-dirty` - No clippy warnings
-- [ ] `cargo test` - All tests pass
-- [ ] `cargo build --release` - Release build succeeds
+# Test with real data (piped mode)
+echo '{"session_id":"test","transcript_path":"path/to/session.jsonl","model":{"id":"claude-sonnet-4-20250514","display_name":"Claude 3.5 Sonnet"}}' | ./target/release/ccusage-statusline-rs
 
-### Testing
+# Test interactive mode (requires ~/.claude/projects with usage data)
+./target/release/ccusage-statusline-rs
 
-```bash
-# Test with sample data from ccusage repo
-cat /path/to/ccusage/apps/ccusage/test/statusline-test.json | cargo run
-
-# Compare Rust vs Node.js output
-cat /path/to/ccusage/apps/ccusage/test/statusline-test.json | ./target/release/ccusage-statusline-rs
-cat /path/to/ccusage/apps/ccusage/test/statusline-test.json | node /path/to/ccusage/apps/ccusage/dist/index.js statusline --visual-burn-rate emoji
-
-# Run performance benchmark (requires ccusage repo)
-bash benchmark.sh
-
-# Build and install package locally
+# Install locally
 make package
-
-# Clean build artifacts
-make clean
 ```
 
-**Testing Checklist**:
-- [ ] Outputs match between Rust and Node.js implementations
-- [ ] Context window (🧠) updates with new messages
-- [ ] Block costs (💰) match billing cycles
-- [ ] Burn rate (🔥) calculated correctly
-- [ ] Performance is <20ms average
+## Code Architecture
 
-## CI/CD Workflows
+```
+src/
+├── main.rs       - Entry point: piped mode vs interactive mode detection
+├── types.rs      - All structs (HookData, Block, BurnRate, ApiUsageData, etc.)
+├── pricing.rs    - LiteLLM pricing fetch from GitHub (24h cache)
+├── blocks.rs     - 5-hour billing block logic (dedup by messageId:requestId)
+├── cache.rs      - Semaphore-based output caching (XDG_RUNTIME_DIR, 30s TTL)
+├── format.rs     - Output formatting (emojis, colors, number formatting)
+├── firefox.rs    - Firefox cookie extraction (immutable=1 SQLite, userID matching)
+└── api_usage.rs  - Claude.ai live API client (30s cache, graceful fallback)
+```
 
-### CI Workflow (`ci.yml`)
+**Data Flow**:
+1. Input: JSONL from stdin or detect interactive mode
+2. Load pricing from cache or fetch from GitHub
+3. Try fetch live usage from claude.ai API (silent failure)
+4. Scan ~/.claude/projects for usage JSONL files
+5. Calculate costs, blocks, burn rate from local data
+6. Use API reset time if available (more accurate than local)
+7. Output: `🤖 Model | 💰 Block | 🔥 Burn | 🧠 Context | 📊 API (if available)`
 
-Triggers on:
-- Push to `master` branch
-- Pull requests to `master`
+## Key Implementation Details
 
-Jobs:
-1. **x86_64 build**: Format check, clippy, build, tests
-2. **aarch64 build**: Cross-compilation build only
+**Firefox Cookie Extraction**:
+- Uses `file:///path/to/cookies.sqlite?immutable=1` to read locked DB
+- Matches `~/.claude/claude.json` userID to Firefox profile (searches cookies for ajs_user_id match)
+- Falls back to most recently modified profile
+- Extracts: `sessionKey`, `lastActiveOrg` only (minimal cookies needed)
 
-### Release Workflow (`release.yml`)
+**Claude.ai API Integration**:
+- Endpoint: `https://claude.ai/api/organizations/{org}/usage`
+- Implementation: Uses curl directly (Cloudflare blocks reqwest/rustls TLS fingerprint)
+- Headers: User-Agent (extracted from Firefox binary version), Cookie (sessionKey + lastActiveOrg)
+- Response: `{five_hour: {utilization: 5, resets_at: "..."}, seven_day: {utilization: 25, ...}}`
+- Caching: 30s in-memory (Mutex<Option<CachedResponse>>)
+- Errors: All API failures silent (stderr only), graceful fallback to local data
 
-Triggers on:
-- Push tags matching `v*` pattern
+**5-Hour Billing Blocks**:
+- Floors timestamps to hour boundary
+- Deduplicates messages using `{messageId}:{requestId}` hash
+- Tracks per-model costs with tiered pricing (200k token threshold)
+- Active block = last message within 5 hours
 
-Jobs:
-1. **Create Release**: Generate source tarball and create GitHub release
-2. **Build Binaries**: Build x86_64 and aarch64 Linux binaries in parallel
+**Performance**:
+- Target: <20ms average (15x faster than Node.js warm)
+- Caching: Output cache (30s), pricing cache (24h), API cache (30s)
+- Early returns: Skip processing if cache hit
 
-**Key Implementation Details**:
-- Uses `dtolnay/rust-toolchain@stable` (not deprecated actions-rs)
-- Uses `rustls-tls` instead of `native-tls` for easier cross-compilation
-- Sets `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc`
-- Sets `PKG_CONFIG_ALLOW_CROSS=1` for aarch64 builds
+## Development Workflow
 
-## Release Process
+**Before every commit**:
+```bash
+cargo fmt                                    # CRITICAL: CI will fail if not formatted
+cargo clippy --fix --allow-dirty --message-format=short
+cargo test --message-format=short
+```
 
-1. Ensure all tests pass: `cargo test`
-2. Update version in `Cargo.toml`
-3. Run formatting: `cargo fmt`
-4. Commit: `git commit -m "chore: bump version to X.Y.Z"`
-5. Tag release: `git tag -as vX.Y.Z -m "Release vX.Y.Z"`
-6. **Push commits AND tags**: `git push && git push --tags`
-7. GitHub Actions automatically:
-   - Creates release with generated notes
-   - Builds and uploads source tarball
-   - Builds and uploads x86_64 and aarch64 binaries
+**Version management** (single source of truth in `Cargo.toml`):
+```bash
+# 1. Edit Cargo.toml version
+# 2. cargo fmt && cargo clippy --fix --allow-dirty
+# 3. git commit -m "chore: bump version to X.Y.Z"
+# 4. git push
+# 5. WAIT for CI to pass on master
+# 6. git tag -as vX.Y.Z -m "Release vX.Y.Z"
+# 7. git push --tags
+```
+
+Both `PKGBUILD` and `Makefile` auto-extract version: `grep -Po '^version = "\K[^"]+' Cargo.toml`
+
+**CI/CD**:
+- `ci.yml`: Runs on master push/PR (format check, clippy, x86_64 build+test, aarch64 build)
+- `release.yml`: Runs on v* tags (creates release, builds x86_64+aarch64 binaries)
+- Uses `rustls-tls` (not native-tls) for easier cross-compilation
+- aarch64: Sets `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc`, `PKG_CONFIG_ALLOW_CROSS=1`
+
+## Testing
+
+**Unit tests**: `cargo test`
+
+**Integration testing**:
+```bash
+# With real transcript
+TRANSCRIPT=$(find ~/.claude/projects -name "*.jsonl" | head -1)
+echo "{\"session_id\":\"test\",\"transcript_path\":\"$TRANSCRIPT\",\"model\":{\"id\":\"claude-sonnet-4-20250514\",\"display_name\":\"Claude 3.5 Sonnet\"}}" | cargo run
+
+# Interactive mode (requires ~/.claude/projects with data)
+cargo run
+
+# API integration (requires Firefox logged into claude.ai)
+# Should show: 📊 5h:X% 7d:X% at end of output
+# Falls back silently to local data if API unavailable
+```
+
+**Testing checklist**:
+- Context (🧠) updates with new messages
+- Block cost (💰) matches billing cycles
+- Burn rate (🔥) calculated correctly
+- Performance <20ms average
+- API metrics shown when Firefox logged in
+- Fallback works when API unavailable
 
 ## Dependencies
 
-### Runtime (all in devDependencies for bundling)
-- `reqwest` with `rustls-tls` - HTTP client for LiteLLM pricing
-- `chrono` - Date/time handling for 5-hour blocks
-- `serde`/`serde_json` - JSON parsing for JSONL files
-- `owo-colors` - Terminal color output
+- `reqwest` (rustls-tls) - HTTP for LiteLLM pricing fetch
+- `rusqlite` (bundled) - Firefox cookie extraction
+- `chrono` - 5-hour block timestamps
+- `serde`/`serde_json` - JSONL parsing
+- `owo-colors` - Terminal colors
 - `anyhow` - Error handling
 - `fs2` - File locking for cache
 - `libc` - UID lookup for XDG_RUNTIME_DIR
+- `curl` (system) - Claude.ai API calls (bypasses Cloudflare)
 
-### Build
-- `cargo` - Rust build system
-- For aarch64: `gcc-aarch64-linux-gnu`, `pkg-config`
+## Gotchas
 
-## Code Style
-
-- Follow Rust standard formatting (`cargo fmt`)
-- All clippy warnings must be fixed
-- Prefer early returns over nested conditionals
-- Use Result types for error handling
-- Keep functions focused and small
-
-## Architecture Notes
-
-**Performance Optimizations**:
-- XDG_RUNTIME_DIR caching with 30-second TTL
-- LiteLLM pricing cached for 24 hours
-- Semaphore-based output caching with file locking
-- Deduplication using `messageId:requestId` hash
-
-**5-Hour Billing Blocks**:
-- Matches Claude's billing cycles exactly
-- Floors timestamps to beginning of hour
-- Tracks active blocks for burn rate calculation
-- Supports tiered pricing at 200k token threshold
-
-**LiteLLM Integration**:
-- Fetches pricing from GitHub daily
-- Supports tiered pricing for Claude models
-- Falls back to hardcoded prices if unavailable
-- Handles cache token pricing (creation + read)
-
-## Troubleshooting
-
-**Build failures on aarch64**:
-- Ensure `rustls-tls` is used (not `native-tls`)
-- Check `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER` is set
-- Verify `PKG_CONFIG_ALLOW_CROSS=1` is set
-
-**CI formatting failures**:
-- Run `cargo fmt` before commit
-- Check `.editorconfig` for line endings
-
-**Version mismatch in builds**:
-- Version is auto-extracted from `Cargo.toml`
-- Never manually edit version in `PKGBUILD` or `Makefile`
-
-## Testing Checklist
-
-Before creating a release:
-- [ ] `cargo fmt` - Code formatted
-- [ ] `cargo clippy --fix --allow-dirty` - No warnings
-- [ ] `cargo test` - All tests pass
-- [ ] `cargo build --release` - Release build succeeds
-- [ ] `make package` - Package builds successfully
-- [ ] CI passes on master branch
-- [ ] Version updated in `Cargo.toml` only
+- **Do NOT use `_var_name` to hide unused variables** (violates CLAUDE.md in parent)
+- Version is ONLY in Cargo.toml, never edit PKGBUILD/Makefile versions
+- CI checks formatting - must run `cargo fmt` before commit
+- DO NOT push tags until CI passes on master
+- API fallback is intentionally silent (only stderr for debugging)
+- Firefox cookies.sqlite must use `immutable=1` mode (locked by Firefox)
