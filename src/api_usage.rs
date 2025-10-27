@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use curl::easy::Easy;
 use serde::Deserialize;
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
@@ -73,25 +73,33 @@ fn fetch_usage_internal() -> Result<ApiUsageData> {
         cookies.session_key, cookies.org_id
     );
 
-    // Use curl directly since it bypasses Cloudflare while reqwest gets 403
-    let output = Command::new("curl")
-        .arg("-s")
-        .arg("-m")
-        .arg("5")
-        .arg(&url)
-        .arg("-H")
-        .arg(format!("User-Agent: {}", cookies.user_agent))
-        .arg("-H")
-        .arg(format!("Cookie: {}", cookie_header))
-        .output()
-        .context("Failed to execute curl")?;
+    // Use libcurl (bypasses Cloudflare while reqwest gets 403)
+    let mut easy = Easy::new();
+    easy.url(&url)?;
+    easy.timeout(Duration::from_secs(5))?;
 
-    if !output.status.success() {
-        anyhow::bail!("curl failed with status: {}", output.status);
+    let mut headers = curl::easy::List::new();
+    headers.append(&format!("User-Agent: {}", cookies.user_agent))?;
+    headers.append(&format!("Cookie: {}", cookie_header))?;
+    easy.http_headers(headers)?;
+
+    let mut response_data = Vec::new();
+    {
+        let mut transfer = easy.transfer();
+        transfer.write_function(|data| {
+            response_data.extend_from_slice(data);
+            Ok(data.len())
+        })?;
+        transfer.perform()?;
+    }
+
+    let response_code = easy.response_code()?;
+    if response_code != 200 {
+        anyhow::bail!("API returned status: {}", response_code);
     }
 
     let response_text =
-        String::from_utf8(output.stdout).context("curl output is not valid UTF-8")?;
+        String::from_utf8(response_data).context("API response is not valid UTF-8")?;
 
     let api_response: ApiResponse =
         serde_json::from_str(&response_text).context("Failed to parse API response")?;

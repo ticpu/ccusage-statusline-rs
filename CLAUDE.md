@@ -54,7 +54,7 @@ src/
 
 **Claude.ai API Integration**:
 - Endpoint: `https://claude.ai/api/organizations/{org}/usage`
-- Implementation: Uses curl directly (Cloudflare blocks reqwest/rustls TLS fingerprint)
+- Implementation: Uses libcurl via `curl` crate (Cloudflare blocks reqwest/rustls TLS fingerprint)
 - Headers: User-Agent (extracted from Firefox binary version), Cookie (sessionKey + lastActiveOrg)
 - Response: `{five_hour: {utilization: 5, resets_at: "..."}, seven_day: {utilization: 25, ...}}`
 - Caching: 30s in-memory (Mutex<Option<CachedResponse>>)
@@ -128,6 +128,7 @@ cargo run
 ## Dependencies
 
 - `reqwest` (rustls-tls) - HTTP for LiteLLM pricing fetch
+- `curl` - libcurl bindings for claude.ai API (bypasses Cloudflare)
 - `rusqlite` (bundled) - Firefox cookie extraction
 - `chrono` - 5-hour block timestamps
 - `serde`/`serde_json` - JSONL parsing
@@ -135,7 +136,6 @@ cargo run
 - `anyhow` - Error handling
 - `fs2` - File locking for cache
 - `libc` - UID lookup for XDG_RUNTIME_DIR
-- `curl` (system) - Claude.ai API calls (bypasses Cloudflare)
 
 ## Gotchas
 
