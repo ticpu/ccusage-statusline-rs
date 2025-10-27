@@ -1,10 +1,13 @@
-mod api_usage;
 mod blocks;
 mod cache;
-mod firefox;
 mod format;
 mod pricing;
 mod types;
+
+#[cfg(target_arch = "x86_64")]
+mod api_usage;
+#[cfg(target_arch = "x86_64")]
+mod firefox;
 
 use anyhow::{Context, Result};
 use blocks::find_active_block;
@@ -61,7 +64,11 @@ fn run_piped_mode() -> Result<()> {
 fn run_interactive_mode() -> Result<()> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
+
+    #[cfg(target_arch = "x86_64")]
     let api_usage = api_usage::fetch_usage();
+    #[cfg(not(target_arch = "x86_64"))]
+    let api_usage = None;
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
@@ -86,7 +93,11 @@ fn run_interactive_mode() -> Result<()> {
 fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
+
+    #[cfg(target_arch = "x86_64")]
     let api_usage = api_usage::fetch_usage();
+    #[cfg(not(target_arch = "x86_64"))]
+    let api_usage = None;
 
     // Initialize pricing fetcher (loads or fetches LiteLLM pricing)
     let pricing = PricingFetcher::new(&cache_dir)?;
