@@ -9,6 +9,9 @@ High-performance statusline for Claude Code that displays real-time usage metric
 ## Features
 
 - ⚡ **Ultra-fast performance** - 15x faster than Node.js implementation (8ms vs 120ms warm)
+- 📊 **Live API integration** - Real-time 5-hour and 7-day utilization from claude.ai API
+- 🖥️ **Interactive mode** - Works as standalone tool or piped statusline
+- 🦊 **Firefox cookie extraction** - Automatic authentication using Firefox profile
 - 💰 **Accurate cost tracking** - Fetches daily pricing from LiteLLM, supports tiered pricing
 - 🔄 **Smart caching** - XDG_RUNTIME_DIR-based caching with 24-hour pricing cache
 - 🎯 **5-hour block tracking** - Matches Claude's billing cycles exactly
