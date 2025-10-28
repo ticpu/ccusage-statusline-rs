@@ -1,6 +1,7 @@
 mod blocks;
 mod cache;
 mod format;
+mod install;
 mod pricing;
 mod types;
 
@@ -13,7 +14,10 @@ use anyhow::{Context, Result};
 use blocks::find_active_block;
 use cache::{get_cache_dir, try_get_cached, update_cache};
 use chrono::Utc;
-use format::{format_api_usage, format_block_info, format_burn_rate, format_context};
+use clap::{Parser, Subcommand};
+use format::{
+    format_api_usage, format_block_info, format_burn_rate, format_context, format_directory,
+};
 use pricing::PricingFetcher;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read};
@@ -25,13 +29,46 @@ use types::{BurnRate, ContextInfo, HookData, UsageData};
 /// so we use 150k as the effective limit for percentage calculations.
 const EFFECTIVE_CONTEXT_LIMIT: u64 = 150_000;
 
-fn main() -> Result<()> {
-    let stdin = io::stdin();
+#[derive(Parser)]
+#[command(name = "ccusage-statusline-rs")]
+#[command(version)]
+#[command(about = "Claude Code usage statusline with live API integration", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
 
-    if stdin.is_terminal() {
-        run_interactive_mode()
-    } else {
-        run_piped_mode()
+#[derive(Subcommand)]
+enum Commands {
+    /// Install statusLine configuration to ~/.claude/settings.json
+    Install,
+    /// Remove statusLine configuration from ~/.claude/settings.json
+    Uninstall,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // Handle subcommands
+    match cli.command {
+        Some(Commands::Install) => {
+            install::install()?;
+            Ok(())
+        }
+        Some(Commands::Uninstall) => {
+            install::uninstall()?;
+            Ok(())
+        }
+        None => {
+            // No subcommand, run normal mode (piped or interactive)
+            let stdin = io::stdin();
+
+            if stdin.is_terminal() {
+                run_interactive_mode()
+            } else {
+                run_piped_mode()
+            }
+        }
     }
 }
 
@@ -132,6 +169,11 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
 
     if let Some(api_str) = format_api_usage(&api_usage) {
         output.push_str(&format!(" │ 📊{}", api_str));
+    }
+
+    // Append directory if available
+    if let Some(workspace) = &hook_data.workspace {
+        output.push_str(&format!(" {}", format_directory(&workspace.current_dir)));
     }
 
     Ok(output)

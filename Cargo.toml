@@ -1,6 +1,6 @@
 [package]
 name = "ccusage-statusline-rs"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 
 [profile.release]
@@ -19,6 +19,7 @@ fs2 = "0.4"
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 num-format = "0.4"
+clap = { version = "4.5", features = ["derive"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

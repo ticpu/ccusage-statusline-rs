@@ -24,6 +24,18 @@ This project is a Rust reimplementation of the statusline feature from [ccusage]
 
 ## Installation
 
+### Quick Install
+
+```bash
+cargo build --release
+sudo cp target/release/ccusage-statusline-rs /usr/local/bin/
+ccusage-statusline-rs install
+```
+
+The `install` command will automatically configure `~/.claude/settings.json` for you.
+
+### Manual Build
+
 ```bash
 cargo build --release
 ```
@@ -32,16 +44,36 @@ The binary will be at `target/release/ccusage-statusline-rs`.
 
 ## Usage
 
-Designed to be used as a Claude Code statusline hook. Add to your `~/.claude/settings.json`:
+### Automatic Configuration
+
+After building, simply run:
+
+```bash
+ccusage-statusline-rs install
+```
+
+This will automatically add the statusLine configuration to `~/.claude/settings.json`. No manual editing, no bash dependencies required!
+
+To remove the configuration:
+
+```bash
+ccusage-statusline-rs uninstall
+```
+
+### Manual Configuration (Not Recommended)
+
+If you prefer to manually configure, add to your `~/.claude/settings.json`:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "input=$(cat); dir=$(echo \"$input\" | jq -r '.workspace.current_dir' | sed 's|^/home/user|~|'); ccusage_output=$(echo \"$input\" | /path/to/ccusage-statusline-rs 2>/dev/null | head -1); printf '%s \\033[32m%s\\033[0m' \"$ccusage_output\" \"$dir\""
+    "command": "/path/to/ccusage-statusline-rs"
   }
 }
 ```
+
+Replace `/path/to/` with the actual path to the binary.
 
 ## Performance
 

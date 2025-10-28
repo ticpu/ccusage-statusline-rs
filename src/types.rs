@@ -8,12 +8,19 @@ pub struct HookData {
     pub session_id: String,
     pub transcript_path: String,
     pub model: ModelInfo,
+    #[serde(default)]
+    pub workspace: Option<Workspace>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Workspace {
+    pub current_dir: String,
 }
 
 /// Usage data entry from JSONL

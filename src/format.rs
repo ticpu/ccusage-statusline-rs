@@ -78,3 +78,20 @@ pub fn format_api_usage(api_usage: &Option<ApiUsageData>) -> Option<String> {
         )
     })
 }
+
+/// Format directory path with home replacement and color
+pub fn format_directory(path: &str) -> String {
+    use std::env;
+
+    let formatted = if let Ok(home) = env::var("HOME") {
+        if path.starts_with(&home) {
+            path.replacen(&home, "~", 1)
+        } else {
+            path.to_string()
+        }
+    } else {
+        path.to_string()
+    };
+
+    formatted.green().to_string()
+}
