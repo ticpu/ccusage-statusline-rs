@@ -69,12 +69,32 @@ pub fn format_currency(amount: f64) -> String {
     format!("${:.2}", amount)
 }
 
+/// Map decimal portion (0.0-0.9) to Unicode block character (vertical fill)
+fn decimal_to_block(value: f64) -> char {
+    let decimal = value.fract();
+    match (decimal * 10.0) as u32 {
+        0 => ' ',
+        1 => '▁',
+        2 => '▂',
+        3 => '▃',
+        4 => '▄',
+        5 => '▅',
+        6 => '▆',
+        7 => '▇',
+        _ => '█',
+    }
+}
+
 /// Format API usage data
 pub fn format_api_usage(api_usage: &Option<ApiUsageData>) -> Option<String> {
     api_usage.as_ref().map(|api| {
+        let five_hour_int = api.five_hour_percent as u32;
+        let five_hour_block = decimal_to_block(api.five_hour_percent);
+        let seven_day_int = api.seven_day_percent as u32;
+
         format!(
-            "5h:{}% 7d:{}%",
-            api.five_hour_percent, api.seven_day_percent
+            "5h:{}%{}7d:{}%",
+            five_hour_int, five_hour_block, seven_day_int
         )
     })
 }

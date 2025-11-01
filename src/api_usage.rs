@@ -119,8 +119,8 @@ fn fetch_usage_internal() -> Result<ApiUsageData> {
         .and_then(|s| s.parse::<DateTime<Utc>>().ok());
 
     Ok(ApiUsageData {
-        five_hour_percent: api_response.five_hour.utilization as u32,
+        five_hour_percent: api_response.five_hour.utilization,
         five_hour_resets_at,
-        seven_day_percent: api_response.seven_day.utilization as u32,
+        seven_day_percent: api_response.seven_day.utilization,
     })
 }
