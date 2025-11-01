@@ -26,8 +26,8 @@ use types::{BurnRate, ContextInfo, HookData, UsageData};
 
 /// Effective context limit accounting for prompt caching compaction.
 /// Nominal Sonnet 4 limit is 200k, but Claude compacts context before reaching 100%,
-/// so we use 150k as the effective limit for percentage calculations.
-const EFFECTIVE_CONTEXT_LIMIT: u64 = 150_000;
+/// so we use 155k as the effective limit for percentage calculations.
+const EFFECTIVE_CONTEXT_LIMIT: u64 = 155_000;
 
 #[derive(Parser)]
 #[command(name = "ccusage-statusline-rs")]
@@ -278,7 +278,7 @@ mod tests {
             ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
         assert_eq!(tokens, 95510);
-        assert_eq!(percentage, 63); // 95510 / 150000 * 100 = 63.67 -> 63
+        assert_eq!(percentage, 61); // 95510 / 155000 * 100 = 61.62 -> 61
     }
 
     #[test]
@@ -288,7 +288,7 @@ mod tests {
             ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
         assert_eq!(tokens, 1000);
-        assert_eq!(percentage, 0); // 1000 / 150000 * 100 = 0.67 -> 0
+        assert_eq!(percentage, 0); // 1000 / 155000 * 100 = 0.64 -> 0
     }
 
     #[test]
@@ -298,6 +298,6 @@ mod tests {
         let percentage =
             ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
-        assert_eq!(percentage, 100); // 199000 / 150000 * 100 = 132.67 -> capped at 100
+        assert_eq!(percentage, 100); // 199000 / 155000 * 100 = 128.38 -> capped at 100
     }
 }

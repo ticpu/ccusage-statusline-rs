@@ -10,7 +10,7 @@ use crate::types::ApiUsageData;
 
 #[derive(Debug, Deserialize)]
 struct UsageLimit {
-    utilization: u32,
+    utilization: f64,
     resets_at: Option<String>,
 }
 
@@ -81,6 +81,15 @@ fn fetch_usage_internal() -> Result<ApiUsageData> {
     let mut headers = curl::easy::List::new();
     headers.append(&format!("User-Agent: {}", cookies.user_agent))?;
     headers.append(&format!("Cookie: {}", cookie_header))?;
+
+    // Add anthropic headers (required by API as of late 2025)
+    if let Some(anon_id) = &cookies.anonymous_id {
+        headers.append(&format!("anthropic-anonymous-id: claudeai.v1.{}", anon_id))?;
+    }
+    if let Some(dev_id) = &cookies.device_id {
+        headers.append(&format!("anthropic-device-id: {}", dev_id))?;
+    }
+
     easy.http_headers(headers)?;
 
     let mut response_data = Vec::new();
@@ -110,8 +119,8 @@ fn fetch_usage_internal() -> Result<ApiUsageData> {
         .and_then(|s| s.parse::<DateTime<Utc>>().ok());
 
     Ok(ApiUsageData {
-        five_hour_percent: api_response.five_hour.utilization,
+        five_hour_percent: api_response.five_hour.utilization as u32,
         five_hour_resets_at,
-        seven_day_percent: api_response.seven_day.utilization,
+        seven_day_percent: api_response.seven_day.utilization as u32,
     })
 }

@@ -8,6 +8,8 @@ pub struct FirefoxCookies {
     pub session_key: String,
     pub org_id: String,
     pub user_agent: String,
+    pub anonymous_id: Option<String>,
+    pub device_id: Option<String>,
 }
 
 /// Find Firefox profile directory matching Claude userID
@@ -121,12 +123,32 @@ pub fn extract_cookies(profile_path: &Path) -> Result<FirefoxCookies> {
         )
         .context("Failed to find lastActiveOrg cookie")?;
 
+    // Extract ajs_anonymous_id (for anthropic-anonymous-id header)
+    let anonymous_id: Option<String> = conn
+        .query_row(
+            "SELECT value FROM moz_cookies WHERE host LIKE '%claude.ai%' AND name = 'ajs_anonymous_id'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+
+    // Extract anthropic-device-id
+    let device_id: Option<String> = conn
+        .query_row(
+            "SELECT value FROM moz_cookies WHERE host LIKE '%claude.ai%' AND name = 'anthropic-device-id'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+
     let user_agent = get_firefox_user_agent();
 
     Ok(FirefoxCookies {
         session_key,
         org_id,
         user_agent,
+        anonymous_id,
+        device_id,
     })
 }
 
