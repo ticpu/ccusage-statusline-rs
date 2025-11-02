@@ -44,6 +44,8 @@ enum Commands {
     Install,
     /// Remove statusLine configuration from ~/.claude/settings.json
     Uninstall,
+    /// Test the statusline with most recent transcript
+    Test,
 }
 
 fn main() -> Result<()> {
@@ -59,6 +61,7 @@ fn main() -> Result<()> {
             install::uninstall()?;
             Ok(())
         }
+        Some(Commands::Test) => run_test_mode(),
         None => {
             // No subcommand, run normal mode (piped or interactive)
             let stdin = io::stdin();
@@ -126,6 +129,65 @@ fn run_interactive_mode() -> Result<()> {
         output.push_str(&format!(" │ 📊{}", api_str));
     }
 
+    println!("{}", output);
+
+    Ok(())
+}
+
+fn run_test_mode() -> Result<()> {
+    let claude_paths = find_claude_paths()?;
+
+    let mut most_recent: Option<(PathBuf, std::time::SystemTime)> = None;
+
+    for base_path in &claude_paths {
+        let project_dirs = fs::read_dir(base_path)
+            .with_context(|| format!("Failed to read directory: {}", base_path.display()))?;
+
+        for project_entry in project_dirs.flatten() {
+            let project_path = project_entry.path();
+            if !project_path.is_dir() {
+                continue;
+            }
+
+            let session_files = match fs::read_dir(&project_path) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+
+            for session_entry in session_files.flatten() {
+                let session_path = session_entry.path();
+                if session_path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                    continue;
+                }
+
+                if let Ok(metadata) = fs::metadata(&session_path)
+                    && let Ok(modified) = metadata.modified()
+                    && (most_recent.is_none() || modified > most_recent.as_ref().unwrap().1)
+                {
+                    most_recent = Some((session_path, modified));
+                }
+            }
+        }
+    }
+
+    let (transcript_path, _) =
+        most_recent.context("No .jsonl files found in Claude directories")?;
+
+    eprintln!("Testing with: {}", transcript_path.display());
+
+    let hook_data = HookData {
+        session_id: "test-session".to_string(),
+        transcript_path: transcript_path.to_string_lossy().to_string(),
+        model: types::ModelInfo {
+            id: "claude-sonnet-4-20250514".to_string(),
+            display_name: "Claude 3.5 Sonnet".to_string(),
+        },
+        workspace: Some(types::Workspace {
+            current_dir: std::env::current_dir()?.to_string_lossy().to_string(),
+        }),
+    };
+
+    let output = generate_statusline(&hook_data)?;
     println!("{}", output);
 
     Ok(())
