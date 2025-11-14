@@ -22,12 +22,13 @@ use pricing::PricingFetcher;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read};
 use std::path::PathBuf;
-use types::{BurnRate, ContextInfo, HookData, UsageData};
+use types::{BurnRate, ClaudeConfig, ContextInfo, HookData, UsageData};
 
-/// Effective context limit accounting for prompt caching compaction.
-/// Nominal Sonnet 4 limit is 200k, but Claude compacts context before reaching 100%,
-/// so we use 155k as the effective limit for percentage calculations.
-const EFFECTIVE_CONTEXT_LIMIT: u64 = 155_000;
+/// Context limit when autoCompactEnabled=true (Claude compacts context before reaching 100%)
+const COMPACTED_CONTEXT_LIMIT: u64 = 155_000;
+
+/// Context limit when autoCompactEnabled=false (full 200k nominal limit)
+const FULL_CONTEXT_LIMIT: u64 = 200_000;
 
 #[derive(Parser)]
 #[command(name = "ccusage-statusline-rs")]
@@ -264,6 +265,31 @@ fn find_claude_paths() -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// Get effective context limit based on autoCompactEnabled setting
+fn get_context_limit() -> u64 {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return COMPACTED_CONTEXT_LIMIT,
+    };
+
+    let config_path = PathBuf::from(&home).join(".claude.json");
+
+    // Try to read and parse config
+    match fs::read_to_string(&config_path) {
+        Ok(content) => match serde_json::from_str::<ClaudeConfig>(&content) {
+            Ok(config) => {
+                if config.auto_compact_enabled {
+                    COMPACTED_CONTEXT_LIMIT
+                } else {
+                    FULL_CONTEXT_LIMIT
+                }
+            }
+            Err(_) => COMPACTED_CONTEXT_LIMIT,
+        },
+        Err(_) => COMPACTED_CONTEXT_LIMIT,
+    }
+}
+
 /// Calculate burn rate for a block
 fn calculate_burn_rate(block: &types::Block) -> Result<BurnRate> {
     if !block.is_active {
@@ -319,8 +345,8 @@ fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Op
 
     let total_tokens = last_tokens.unwrap_or(0);
 
-    let percentage =
-        ((total_tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+    let context_limit = get_context_limit();
+    let percentage = ((total_tokens as f64 / context_limit as f64) * 100.0).min(100.0) as u32;
 
     Ok(Some(ContextInfo {
         tokens: total_tokens,
@@ -330,36 +356,64 @@ fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Op
 
 #[cfg(test)]
 mod tests {
-    use super::EFFECTIVE_CONTEXT_LIMIT;
+    use super::{COMPACTED_CONTEXT_LIMIT, FULL_CONTEXT_LIMIT};
 
     #[test]
-    fn test_context_calculation_with_caching() {
-        // Test: 10 + 500 + 95000 = 95510
+    fn test_context_calculation_with_caching_compacted() {
+        // Test with compacted limit (155k)
         let tokens = 10 + 500 + 95000;
         let percentage =
-            ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+            ((tokens as f64 / COMPACTED_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
         assert_eq!(tokens, 95510);
         assert_eq!(percentage, 61); // 95510 / 155000 * 100 = 61.62 -> 61
     }
 
     #[test]
-    fn test_context_calculation_without_caching() {
+    fn test_context_calculation_with_caching_full() {
+        // Test with full limit (200k)
+        let tokens = 10 + 500 + 95000;
+        let percentage = ((tokens as f64 / FULL_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+
+        assert_eq!(tokens, 95510);
+        assert_eq!(percentage, 47); // 95510 / 200000 * 100 = 47.755 -> 47
+    }
+
+    #[test]
+    fn test_context_calculation_without_caching_compacted() {
         let tokens = 1000;
         let percentage =
-            ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+            ((tokens as f64 / COMPACTED_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
         assert_eq!(tokens, 1000);
         assert_eq!(percentage, 0); // 1000 / 155000 * 100 = 0.64 -> 0
     }
 
     #[test]
-    fn test_context_calculation_capped() {
-        // Test that percentage caps at 100%
+    fn test_context_calculation_without_caching_full() {
+        let tokens = 1000;
+        let percentage = ((tokens as f64 / FULL_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+
+        assert_eq!(tokens, 1000);
+        assert_eq!(percentage, 0); // 1000 / 200000 * 100 = 0.5 -> 0
+    }
+
+    #[test]
+    fn test_context_calculation_capped_compacted() {
+        // Test that percentage caps at 100% with compacted limit
         let tokens = 199_000u64;
         let percentage =
-            ((tokens as f64 / EFFECTIVE_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+            ((tokens as f64 / COMPACTED_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
 
         assert_eq!(percentage, 100); // 199000 / 155000 * 100 = 128.38 -> capped at 100
+    }
+
+    #[test]
+    fn test_context_calculation_capped_full() {
+        // Test that percentage caps at 100% with full limit
+        let tokens = 250_000u64;
+        let percentage = ((tokens as f64 / FULL_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+
+        assert_eq!(percentage, 100); // 250000 / 200000 * 100 = 125 -> capped at 100
     }
 }

@@ -174,3 +174,14 @@ pub struct ApiUsageData {
     pub five_hour_resets_at: Option<DateTime<Utc>>,
     pub seven_day_percent: f64,
 }
+
+/// Claude configuration from ~/.claude.json
+#[derive(Debug, Deserialize)]
+pub struct ClaudeConfig {
+    #[serde(default = "default_auto_compact", rename = "autoCompactEnabled")]
+    pub auto_compact_enabled: bool,
+}
+
+fn default_auto_compact() -> bool {
+    true
+}
