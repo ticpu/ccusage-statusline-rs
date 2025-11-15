@@ -115,6 +115,9 @@ cargo test --message-format=short
 # 5. WAIT for CI to pass on master
 # 6. git tag -as vX.Y.Z -m "Release vX.Y.Z"
 # 7. git push --tags
+# 8. WAIT for Release workflow to complete successfully
+# 9. Update AUR package: cd ~/.cache/paru/clone/ccusage-statusline-rs/ && ./update-pkg.sh 2>&1 | grep -v Compiling
+#    (Should output the new version; only troubleshoot if it fails)
 ```
 
 Both `PKGBUILD` and `Makefile` auto-extract version: `grep -Po '^version = "\K[^"]+' Cargo.toml`

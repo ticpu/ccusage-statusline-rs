@@ -1,5 +1,6 @@
 mod blocks;
 mod cache;
+mod claude_update;
 mod format;
 mod install;
 mod pricing;
@@ -223,6 +224,7 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let block_info = format_block_info(&block, &api_usage);
     let burn_info = format_burn_rate(&burn_rate);
     let context_str = format_context(&context_info);
+    let update_available = claude_update::check_update_available();
 
     // Build output with optional API usage
     let mut output = format!(
@@ -232,6 +234,11 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
 
     if let Some(api_str) = format_api_usage(&api_usage) {
         output.push_str(&format!(" │ 📊{}", api_str));
+    }
+
+    // Add update notification if available
+    if let Some(new_version) = update_available {
+        output.push_str(&format!(" │ 🔼{}", new_version));
     }
 
     // Append directory if available
