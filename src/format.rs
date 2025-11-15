@@ -3,29 +3,68 @@ use chrono::Utc;
 use num_format::{Locale, ToFormattedString};
 use owo_colors::OwoColorize;
 
-/// Format block information (use API timing if available, more accurate)
-pub fn format_block_info(block: &Block, api_usage: &Option<ApiUsageData>) -> String {
+/// Format block cost
+pub fn format_block_info(block: &Block) -> String {
     if !block.is_active {
         return "No block".to_string();
+    }
+
+    format_currency(block.cost_usd)
+}
+
+/// Pick clock emoji based on hours remaining
+fn get_clock_emoji(remaining_hours: f64) -> &'static str {
+    let remaining_minutes = remaining_hours * 60.0;
+
+    if remaining_minutes < 15.0 {
+        "🕛" // 12 o'clock
+    } else if remaining_hours <= 1.0 {
+        "🕐" // 1 o'clock
+    } else if remaining_hours <= 2.0 {
+        "🕑" // 2 o'clock
+    } else if remaining_hours <= 3.0 {
+        "🕒" // 3 o'clock
+    } else if remaining_hours <= 4.0 {
+        "🕓" // 4 o'clock
+    } else {
+        "🕔" // 5 o'clock
+    }
+}
+
+/// Format time remaining in block (use API timing if available, more accurate)
+pub fn format_time_remaining(block: &Block, api_usage: &Option<ApiUsageData>) -> Option<String> {
+    if !block.is_active {
+        return None;
     }
 
     let now = Utc::now();
 
     // Use API reset time if available (includes web usage, more accurate)
-    let remaining = if let Some(api) = api_usage {
+    let remaining_hours = if let Some(api) = api_usage {
         if let Some(reset_time) = api.five_hour_resets_at {
-            (reset_time - now).num_minutes()
+            (reset_time - now).num_seconds() as f64 / 3600.0
         } else {
-            (block.end_time - now).num_minutes()
+            block.hours_remaining.unwrap_or(0.0)
         }
     } else {
-        (block.end_time - now).num_minutes()
+        block.hours_remaining.unwrap_or(0.0)
     };
 
-    let hours = remaining / 60;
-    let mins = remaining % 60;
+    if remaining_hours <= 0.0 {
+        return Some(format!("{}0h", get_clock_emoji(0.0)));
+    }
 
-    format!("{} ({}h{}m)", format_currency(block.cost_usd), hours, mins)
+    let hours = remaining_hours.floor() as i64;
+    let mins = ((remaining_hours - hours as f64) * 60.0).round() as i64;
+    let clock = get_clock_emoji(remaining_hours);
+
+    if hours > 0 && mins > 0 {
+        Some(format!("{}{}h{}m", clock, hours, mins))
+    } else if hours > 0 {
+        Some(format!("{}{}h", clock, hours))
+    } else {
+        Some(format!("{}{}m", clock, mins))
+    }
 }
 
 /// Format burn rate with emoji indicator

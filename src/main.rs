@@ -18,6 +18,7 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use format::{
     format_api_usage, format_block_info, format_burn_rate, format_context, format_directory,
+    format_time_remaining,
 };
 use pricing::PricingFetcher;
 use std::fs::{self, File};
@@ -122,10 +123,17 @@ fn run_interactive_mode() -> Result<()> {
     let block = find_active_block(&claude_paths, &pricing)?;
     let burn_rate = calculate_burn_rate(&block)?;
 
-    let block_info = format_block_info(&block, &api_usage);
+    let block_info = format_block_info(&block);
+    let time_remaining = format_time_remaining(&block, &api_usage);
     let burn_info = format_burn_rate(&burn_rate);
 
-    let mut output = format!("💰{} │ 🔥{}", block_info, burn_info);
+    let mut output = format!("💰{}", block_info);
+
+    if let Some(time) = time_remaining {
+        output.push_str(&format!(" │ {}", time));
+    }
+
+    output.push_str(&format!(" │ 🔥{}", burn_info));
 
     if let Some(api_str) = format_api_usage(&api_usage) {
         output.push_str(&format!(" │ 📊{}", api_str));
@@ -221,16 +229,23 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let context_info = calculate_context_tokens(&hook_data.transcript_path, &hook_data.model.id)?;
 
     // Format output
-    let block_info = format_block_info(&block, &api_usage);
+    let block_info = format_block_info(&block);
+    let time_remaining = format_time_remaining(&block, &api_usage);
     let burn_info = format_burn_rate(&burn_rate);
     let context_str = format_context(&context_info);
     let update_available = claude_update::check_update_available();
 
     // Build output with optional API usage
     let mut output = format!(
-        "🤖{} │ 💰{} │ 🔥{} │ 🧠{}",
-        hook_data.model.display_name, block_info, burn_info, context_str
+        "🤖{} │ 💰{}",
+        hook_data.model.display_name, block_info
     );
+
+    if let Some(time) = time_remaining {
+        output.push_str(&format!(" │ {}", time));
+    }
+
+    output.push_str(&format!(" │ 🔥{} │ 🧠{}", burn_info, context_str));
 
     if let Some(api_str) = format_api_usage(&api_usage) {
         output.push_str(&format!(" │ 📊{}", api_str));

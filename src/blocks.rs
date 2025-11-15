@@ -119,6 +119,14 @@ pub fn create_block_from_entries(
     let time_since_last_activity = now.timestamp_millis() - actual_end_time.timestamp_millis();
     let is_active = time_since_last_activity < session_duration_ms && now < end_time;
 
+    // Calculate hours remaining if active
+    let hours_remaining = if is_active {
+        let remaining = (end_time - now).num_seconds() as f64 / 3600.0;
+        Some(remaining.max(0.0))
+    } else {
+        None
+    };
+
     // Aggregate costs and tokens
     let mut cost_usd = 0.0;
     let mut total_tokens = 0u64;
@@ -134,6 +142,7 @@ pub fn create_block_from_entries(
         cost_usd,
         total_tokens,
         is_active,
+        hours_remaining,
     }
 }
 
@@ -217,16 +226,19 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
                 cost_usd: block.cost_usd,
                 total_tokens: block.total_tokens,
                 is_active: true,
+                hours_remaining: block.hours_remaining,
             });
         }
     }
 
     // No active block found, return empty
+    let next_end = now + Duration::hours(BLOCK_DURATION_HOURS);
     Ok(Block {
         start_time: now,
-        end_time: now + Duration::hours(BLOCK_DURATION_HOURS),
+        end_time: next_end,
         cost_usd: 0.0,
         total_tokens: 0,
         is_active: false,
+        hours_remaining: None,
     })
 }

@@ -151,6 +151,7 @@ pub struct Block {
     pub cost_usd: f64,
     pub total_tokens: u64,
     pub is_active: bool,
+    pub hours_remaining: Option<f64>,
 }
 
 /// Burn rate information
