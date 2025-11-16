@@ -1,6 +1,7 @@
 mod blocks;
 mod cache;
 mod claude_update;
+mod config;
 mod format;
 mod install;
 mod pricing;
@@ -49,6 +50,8 @@ enum Commands {
     Uninstall,
     /// Test the statusline with most recent transcript
     Test,
+    /// Configure statusline elements (enable/disable and reorder)
+    Config,
 }
 
 fn main() -> Result<()> {
@@ -65,6 +68,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Test) => run_test_mode(),
+        Some(Commands::Config) => config::run_config_menu(),
         None => {
             // No subcommand, run normal mode (piped or interactive)
             let stdin = io::stdin();
@@ -208,6 +212,9 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
+    // Load configuration
+    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+
     #[cfg(target_arch = "x86_64")]
     let api_usage = api_usage::fetch_usage();
     #[cfg(not(target_arch = "x86_64"))]
@@ -228,40 +235,54 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     // Calculate context tokens
     let context_info = calculate_context_tokens(&hook_data.transcript_path, &hook_data.model.id)?;
 
-    // Format output
+    // Format output components
     let block_info = format_block_info(&block);
     let time_remaining = format_time_remaining(&block, &api_usage);
     let burn_info = format_burn_rate(&burn_rate);
     let context_str = format_context(&context_info);
     let update_available = claude_update::check_update_available();
 
-    // Build output with optional API usage
-    let mut output = format!(
-        "🤖{} │ 💰{}",
-        hook_data.model.display_name, block_info
-    );
+    // Build output based on enabled elements
+    let mut parts = Vec::new();
 
-    if let Some(time) = time_remaining {
-        output.push_str(&format!(" │ {}", time));
+    for element in &statusline_config.enabled_elements {
+        match element {
+            config::StatusElement::Model => {
+                parts.push(format!("🤖{}", hook_data.model.display_name));
+            }
+            config::StatusElement::BlockCost => {
+                parts.push(format!("💰{}", block_info));
+            }
+            config::StatusElement::TimeRemaining => {
+                if let Some(ref time) = time_remaining {
+                    parts.push(time.clone());
+                }
+            }
+            config::StatusElement::BurnRate => {
+                parts.push(format!("🔥{}", burn_info));
+            }
+            config::StatusElement::Context => {
+                parts.push(format!("🧠{}", context_str));
+            }
+            config::StatusElement::ApiMetrics => {
+                if let Some(api_str) = format_api_usage(&api_usage) {
+                    parts.push(format!("📊{}", api_str));
+                }
+            }
+            config::StatusElement::UpdateNotification => {
+                if let Some(ref new_version) = update_available {
+                    parts.push(format!("🔼{}", new_version));
+                }
+            }
+            config::StatusElement::Directory => {
+                if let Some(workspace) = &hook_data.workspace {
+                    parts.push(format_directory(&workspace.current_dir));
+                }
+            }
+        }
     }
 
-    output.push_str(&format!(" │ 🔥{} │ 🧠{}", burn_info, context_str));
-
-    if let Some(api_str) = format_api_usage(&api_usage) {
-        output.push_str(&format!(" │ 📊{}", api_str));
-    }
-
-    // Add update notification if available
-    if let Some(new_version) = update_available {
-        output.push_str(&format!(" │ 🔼{}", new_version));
-    }
-
-    // Append directory if available
-    if let Some(workspace) = &hook_data.workspace {
-        output.push_str(&format!(" {}", format_directory(&workspace.current_dir)));
-    }
-
-    Ok(output)
+    Ok(parts.join(" │ "))
 }
 
 /// Find Claude data directories
