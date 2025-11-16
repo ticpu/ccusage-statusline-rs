@@ -107,6 +107,7 @@ pub fn run_config_menu() -> Result<()> {
 
     let selected = MultiSelect::new("Select elements to display:", options)
         .with_default(&default_indices)
+        .with_page_size(20)
         .prompt()?;
 
     let enabled_elements: Vec<StatusElement> = selected
