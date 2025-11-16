@@ -10,6 +10,9 @@ High-performance statusline for Claude Code that displays real-time usage metric
 
 - ⚡ **Ultra-fast performance** - 15x faster than Node.js implementation (8ms vs 120ms warm)
 - 📊 **Live API integration** - Real-time 5-hour and 7-day utilization from claude.ai API
+- 🔼 **Update notifications** - Checks npm registry for Claude Code updates (30-min cache)
+- 🕑 **Time remaining** - Shows time left in billing block with clock emoji easter egg
+- ⚙️ **Interactive configuration** - Menu-based UI to enable/disable statusline elements
 - 🖥️ **Interactive mode** - Works as standalone tool or piped statusline
 - 🦊 **Firefox cookie extraction** - Automatic authentication using Firefox profile
 - 💰 **Accurate cost tracking** - Fetches daily pricing from LiteLLM, supports tiered pricing
@@ -59,6 +62,18 @@ To remove the configuration:
 ```bash
 ccusage-statusline-rs uninstall
 ```
+
+### Customizing the Statusline
+
+Configure which elements to display:
+
+```bash
+ccusage-statusline-rs config
+```
+
+This opens an interactive menu where you can:
+- Enable/disable individual elements (Model, Block cost, Time remaining, etc.)
+- Configuration persists in `~/.claude/ccusage-statusline-config.json`
 
 ### Manual Configuration (Not Recommended)
 

@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
 const NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";
@@ -79,6 +80,17 @@ fn fetch_latest_version() -> Result<String> {
     Ok(data.dist_tags.latest)
 }
 
+fn get_installed_claude_version() -> Option<String> {
+    let output = Command::new("claude").arg("--version").output().ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let version_output = String::from_utf8(output.stdout).ok()?;
+    version_output.split_whitespace().next().map(String::from)
+}
+
 fn compare_versions(current: &str, latest: &str) -> bool {
     use semver::Version;
 
@@ -96,16 +108,17 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 /// Returns Some(version) if an update is available, None otherwise.
 /// Caches results for 30 minutes.
 pub fn check_update_available() -> Option<String> {
+    let current = get_installed_claude_version()?;
+
     // Try to read cache first
     if let Some(cache) = read_cache()
         && is_cache_fresh(&cache)
     {
         // Use cached result
-        if let Some(ref latest) = cache.latest_version {
-            let current = env!("CARGO_PKG_VERSION");
-            if compare_versions(current, latest) {
-                return Some(latest.clone());
-            }
+        if let Some(ref latest) = cache.latest_version
+            && compare_versions(&current, latest)
+        {
+            return Some(latest.clone());
         }
         return None;
     }
@@ -132,11 +145,10 @@ pub fn check_update_available() -> Option<String> {
     let _ = write_cache(&new_cache); // Ignore write errors
 
     // Check if update available
-    if let Some(ref latest) = latest_version {
-        let current = env!("CARGO_PKG_VERSION");
-        if compare_versions(current, latest) {
-            return Some(latest.clone());
-        }
+    if let Some(ref latest) = latest_version
+        && compare_versions(&current, latest)
+    {
+        return Some(latest.clone());
     }
 
     None
