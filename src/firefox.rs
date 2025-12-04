@@ -112,7 +112,9 @@ pub fn extract_cookies(profile_path: &Path) -> Result<FirefoxCookies> {
             [],
             |row| row.get(0),
         )
-        .context("Failed to find sessionKey cookie")?;
+        .context(
+            "sessionKey cookie not found - visit https://claude.ai/settings/usage in Firefox",
+        )?;
 
     // Extract lastActiveOrg
     let org_id: String = conn
