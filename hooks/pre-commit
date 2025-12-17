@@ -3,16 +3,14 @@
 
 set -e
 
-echo "Running cargo fmt check..."
-if ! cargo fmt -- --check; then
+if ! cargo fmt -- --check 2>/dev/null; then
     echo "❌ Code is not formatted. Run 'cargo fmt' to fix."
     exit 1
 fi
 
-echo "Running cargo clippy..."
-if ! cargo clippy --all-targets --message-format=short -- -D warnings; then
-    echo "❌ Clippy found warnings. Fix them before committing."
+if ! cargo clippy --all-targets --message-format=short -- -D warnings 2>&1 | grep -qE "^error|^warning"; then
+    exit 0
+else
+    cargo clippy --all-targets --message-format=short -- -D warnings
     exit 1
 fi
-
-echo "✅ Pre-commit checks passed"
