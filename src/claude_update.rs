@@ -1,3 +1,4 @@
+use crate::config::{StatuslineConfig, VersionChannel};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,7 @@ use std::process::Command;
 use std::time::Duration;
 
 const NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";
+const GCS_STABLE_URL: &str = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/stable";
 const UPDATE_CHECK_CACHE_TTL: Duration = Duration::from_secs(1800); // 30 minutes
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -25,6 +27,8 @@ struct DistTags {
 struct UpdateCache {
     latest_version: Option<String>,
     checked_at: DateTime<Utc>,
+    #[serde(default)]
+    channel: VersionChannel,
 }
 
 fn get_cache_path() -> Result<PathBuf> {
@@ -59,25 +63,42 @@ fn is_cache_fresh(cache: &UpdateCache) -> bool {
         .unwrap_or(false)
 }
 
-fn fetch_latest_version() -> Result<String> {
+fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()?;
 
-    let response = client
-        .get(NPM_REGISTRY_URL)
-        .send()
-        .context("Failed to fetch npm registry")?;
+    match channel {
+        VersionChannel::Stable => {
+            let response = client
+                .get(GCS_STABLE_URL)
+                .send()
+                .context("Failed to fetch GCS stable version")?;
 
-    if !response.status().is_success() {
-        anyhow::bail!("npm registry returned status: {}", response.status());
+            if !response.status().is_success() {
+                anyhow::bail!("GCS returned status: {}", response.status());
+            }
+
+            let version = response.text().context("Failed to read version")?;
+            Ok(version.trim().to_string())
+        }
+        VersionChannel::Latest => {
+            let response = client
+                .get(NPM_REGISTRY_URL)
+                .send()
+                .context("Failed to fetch npm registry")?;
+
+            if !response.status().is_success() {
+                anyhow::bail!("npm registry returned status: {}", response.status());
+            }
+
+            let data: NpmRegistryResponse = response
+                .json()
+                .context("Failed to parse npm registry response")?;
+
+            Ok(data.dist_tags.latest)
+        }
     }
-
-    let data: NpmRegistryResponse = response
-        .json()
-        .context("Failed to parse npm registry response")?;
-
-    Ok(data.dist_tags.latest)
 }
 
 fn get_installed_claude_version() -> Option<String> {
@@ -109,12 +130,16 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 /// Caches results for 30 minutes.
 pub fn check_update_available() -> Option<String> {
     let current = get_installed_claude_version()?;
+    let channel = StatuslineConfig::load()
+        .map(|c| c.version_channel)
+        .unwrap_or_default();
 
     // Try to read cache first
     if let Some(cache) = read_cache()
         && is_cache_fresh(&cache)
+        && cache.channel == channel
     {
-        // Use cached result
+        // Use cached result (same channel)
         if let Some(ref latest) = cache.latest_version
             && compare_versions(&current, latest)
         {
@@ -123,13 +148,15 @@ pub fn check_update_available() -> Option<String> {
         return None;
     }
 
-    // Cache miss or stale - fetch new data
-    let latest_version = match fetch_latest_version() {
+    // Cache miss, stale, or channel changed - fetch new data
+    let latest_version = match fetch_latest_version(channel) {
         Ok(version) => Some(version),
         Err(_) => {
             // Fail silently like Claude Code does
-            // Use old cache if available
-            if let Some(cache) = read_cache() {
+            // Use old cache if available and same channel
+            if let Some(cache) = read_cache()
+                && cache.channel == channel
+            {
                 cache.latest_version
             } else {
                 None
@@ -141,6 +168,7 @@ pub fn check_update_available() -> Option<String> {
     let new_cache = UpdateCache {
         latest_version: latest_version.clone(),
         checked_at: Utc::now(),
+        channel,
     };
     let _ = write_cache(&new_cache); // Ignore write errors
 
