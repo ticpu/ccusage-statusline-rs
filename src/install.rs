@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Write};
@@ -25,19 +25,18 @@ fn prompt_yes_no(prompt: &str) -> Result<bool> {
 pub fn install() -> Result<()> {
     let settings_path = get_settings_path()?;
 
-    if !settings_path.exists() {
-        bail!(
-            "Settings file not found: {}\n\
-            Please run Claude Code at least once first to create the settings file.",
-            settings_path.display()
-        );
-    }
-
-    // Read and parse settings
-    let content = fs::read_to_string(&settings_path).context("Failed to read settings file")?;
-
-    let mut settings: Value =
-        serde_json::from_str(&content).context("Failed to parse settings.json (invalid JSON)")?;
+    // Create settings file if it doesn't exist
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).context("Failed to read settings file")?;
+        serde_json::from_str(&content).context("Failed to parse settings.json (invalid JSON)")?
+    } else {
+        // Create parent directory if needed
+        if let Some(parent) = settings_path.parent() {
+            fs::create_dir_all(parent).context("Failed to create ~/.claude directory")?;
+        }
+        println!("Creating new settings file: {}", settings_path.display());
+        json!({})
+    };
 
     // Check if statusLine already exists
     if let Some(existing) = settings.get("statusLine") {
@@ -83,7 +82,8 @@ pub fn uninstall() -> Result<()> {
     let settings_path = get_settings_path()?;
 
     if !settings_path.exists() {
-        bail!("Settings file not found: {}", settings_path.display());
+        println!("ℹ️  Settings file does not exist. Nothing to uninstall.");
+        return Ok(());
     }
 
     // Read and parse settings
