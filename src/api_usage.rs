@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use curl::easy::Easy;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -9,7 +8,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::cache::get_cache_dir;
-use crate::firefox;
 use crate::types::ApiUsageData;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,6 +20,19 @@ struct UsageLimit {
 struct ApiResponse {
     five_hour: UsageLimit,
     seven_day: UsageLimit,
+    seven_day_sonnet: Option<UsageLimit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeCredentials {
+    #[serde(rename = "claudeAiOauth")]
+    claude_ai_oauth: Option<OAuthCredentials>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthCredentials {
+    #[serde(rename = "accessToken")]
+    access_token: String,
 }
 
 const CACHE_TTL_SECS: u64 = 30;
@@ -33,7 +44,25 @@ fn get_api_cache_path() -> Result<PathBuf> {
     Ok(cache_dir.join("api-usage-cache.json"))
 }
 
-/// Fetch usage data from claude.ai API with filesystem-based caching and advisory locks
+/// Read OAuth credentials from Claude Code's credentials file
+fn read_oauth_credentials() -> Result<String> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let creds_path = PathBuf::from(&home).join(".claude/.credentials.json");
+
+    let content = fs::read_to_string(&creds_path).context(
+        "Failed to read ~/.claude/.credentials.json - ensure you're logged in with Claude Code",
+    )?;
+
+    let creds: ClaudeCredentials =
+        serde_json::from_str(&content).context("Failed to parse credentials file")?;
+
+    creds
+        .claude_ai_oauth
+        .map(|oauth| oauth.access_token)
+        .context("No OAuth credentials found - run 'claude' to login")
+}
+
+/// Fetch usage data from Anthropic API with filesystem-based caching and advisory locks
 pub fn fetch_usage() -> Option<ApiUsageData> {
     match fetch_usage_with_lock() {
         Ok(data) => Some(data),
@@ -118,67 +147,51 @@ fn parse_api_response(api_response: ApiResponse) -> ApiUsageData {
         .resets_at
         .and_then(|s| s.parse::<DateTime<Utc>>().ok());
 
+    let seven_day_resets_at = api_response
+        .seven_day
+        .resets_at
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+
+    let seven_day_sonnet_percent = api_response
+        .seven_day_sonnet
+        .map(|l| l.utilization)
+        .unwrap_or(0.0);
+
     ApiUsageData {
         five_hour_percent: api_response.five_hour.utilization,
         five_hour_resets_at,
         seven_day_percent: api_response.seven_day.utilization,
+        seven_day_resets_at,
+        seven_day_sonnet_percent,
     }
 }
 
 fn fetch_api_response() -> Result<ApiResponse> {
-    // Get cookies from Firefox
-    let cookies = firefox::get_claude_cookies().context("Failed to extract Firefox cookies")?;
+    let access_token = read_oauth_credentials()?;
+    let user_agent = crate::claude_binary::get_user_agent();
 
-    // Build API URL
-    let url = format!(
-        "https://claude.ai/api/organizations/{}/usage",
-        cookies.org_id
-    );
+    let url = "https://api.anthropic.com/api/oauth/usage";
 
-    // Build cookie header (minimal: only sessionKey and lastActiveOrg)
-    let cookie_header = format!(
-        "sessionKey={}; lastActiveOrg={}",
-        cookies.session_key, cookies.org_id
-    );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
 
-    // Use libcurl (bypasses Cloudflare while reqwest gets 403)
-    let mut easy = Easy::new();
-    easy.url(&url)?;
-    easy.timeout(Duration::from_secs(5))?;
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("User-Agent", user_agent)
+        .send()
+        .context("Failed to send request to Anthropic API")?;
 
-    let mut headers = curl::easy::List::new();
-    headers.append(&format!("User-Agent: {}", cookies.user_agent))?;
-    headers.append(&format!("Cookie: {}", cookie_header))?;
-
-    // Add anthropic headers (required by API as of late 2025)
-    if let Some(anon_id) = &cookies.anonymous_id {
-        headers.append(&format!("anthropic-anonymous-id: claudeai.v1.{}", anon_id))?;
-    }
-    if let Some(dev_id) = &cookies.device_id {
-        headers.append(&format!("anthropic-device-id: {}", dev_id))?;
+    if !response.status().is_success() {
+        anyhow::bail!("API returned status: {}", response.status());
     }
 
-    easy.http_headers(headers)?;
-
-    let mut response_data = Vec::new();
-    {
-        let mut transfer = easy.transfer();
-        transfer.write_function(|data| {
-            response_data.extend_from_slice(data);
-            Ok(data.len())
-        })?;
-        transfer.perform()?;
-    }
-
-    let response_code = easy.response_code()?;
-    if response_code != 200 {
-        anyhow::bail!("API returned status: {}", response_code);
-    }
-
-    let response_text =
-        String::from_utf8(response_data).context("API response is not valid UTF-8")?;
-
-    serde_json::from_str(&response_text).context("Failed to parse API response")
+    response
+        .json()
+        .context("Failed to parse API response as JSON")
 }
 
 #[cfg(test)]
@@ -203,6 +216,10 @@ mod tests {
                 utilization: 25.0,
                 resets_at: Some("2025-11-02T12:00:00Z".to_string()),
             },
+            seven_day_sonnet: Some(UsageLimit {
+                utilization: 10.0,
+                resets_at: Some("2025-11-02T12:00:00Z".to_string()),
+            }),
         };
         fs::write(
             &cache_path,
@@ -236,6 +253,10 @@ mod tests {
                 utilization: 30.0,
                 resets_at: Some("2025-11-02T13:00:00Z".to_string()),
             },
+            seven_day_sonnet: Some(UsageLimit {
+                utilization: 15.0,
+                resets_at: Some("2025-11-02T13:00:00Z".to_string()),
+            }),
         };
 
         let temp_path = cache_path.with_extension("tmp");
@@ -262,6 +283,7 @@ mod tests {
                 utilization: 25.0,
                 resets_at: Some("2025-11-02T12:00:00Z".to_string()),
             },
+            seven_day_sonnet: None,
         };
         fs::write(&cache_path, serde_json::to_string(&response).unwrap()).unwrap();
 

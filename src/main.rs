@@ -1,5 +1,7 @@
+mod api_usage;
 mod blocks;
 mod cache;
+mod claude_binary;
 mod claude_update;
 mod config;
 mod format;
@@ -7,20 +9,12 @@ mod install;
 mod pricing;
 mod types;
 
-#[cfg(target_arch = "x86_64")]
-mod api_usage;
-#[cfg(target_arch = "x86_64")]
-mod firefox;
-
 use anyhow::{Context, Result};
 use blocks::find_active_block;
 use cache::{get_cache_dir, try_get_cached, update_cache};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use format::{
-    format_api_usage, format_block_info, format_burn_rate, format_context, format_directory,
-    format_time_remaining,
-};
+use format::*;
 use pricing::PricingFetcher;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read};
@@ -117,33 +111,31 @@ fn run_interactive_mode() -> Result<()> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
-    #[cfg(target_arch = "x86_64")]
     let api_usage = api_usage::fetch_usage();
-    #[cfg(not(target_arch = "x86_64"))]
-    let api_usage = None;
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
     let block = find_active_block(&claude_paths, &pricing)?;
     let burn_rate = calculate_burn_rate(&block)?;
 
-    let block_info = format_block_info(&block);
-    let time_remaining = format_time_remaining(&block, &api_usage);
-    let burn_info = format_burn_rate(&burn_rate);
+    let mut parts = Vec::new();
 
-    let mut output = format!("💰{}", block_info);
+    parts.push(format!("💰{}", format_block_info(&block)));
 
-    if let Some(time) = time_remaining {
-        output.push_str(&format!(" │ {}", time));
+    if let Some(time) = format_time_remaining_5h(&block, &api_usage) {
+        parts.push(time);
     }
 
-    output.push_str(&format!(" │ 🔥{}", burn_info));
+    parts.push(format!("🔥{}", format_burn_rate(&burn_rate)));
 
-    if let Some(api_str) = format_api_usage(&api_usage) {
-        output.push_str(&format!(" │ 📊{}", api_str));
+    if let Some(api) = format_api_usage_5h(&api_usage) {
+        parts.push(format!("📊{}", api));
+    }
+    if let Some(api) = format_api_usage_7d(&api_usage) {
+        parts.push(api);
     }
 
-    println!("{}", output);
+    println!("{}", parts.join(" │ "));
 
     Ok(())
 }
@@ -212,37 +204,16 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
-    // Load configuration
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
-
-    #[cfg(target_arch = "x86_64")]
     let api_usage = api_usage::fetch_usage();
-    #[cfg(not(target_arch = "x86_64"))]
-    let api_usage = None;
 
-    // Initialize pricing fetcher (loads or fetches LiteLLM pricing)
     let pricing = PricingFetcher::new(&cache_dir)?;
-
-    // Find Claude data directories
     let claude_paths = find_claude_paths()?;
-
-    // Load usage data and find active block
     let block = find_active_block(&claude_paths, &pricing)?;
-
-    // Calculate burn rate
     let burn_rate = calculate_burn_rate(&block)?;
-
-    // Calculate context tokens
     let context_info = calculate_context_tokens(&hook_data.transcript_path, &hook_data.model.id)?;
-
-    // Format output components
-    let block_info = format_block_info(&block);
-    let time_remaining = format_time_remaining(&block, &api_usage);
-    let burn_info = format_burn_rate(&burn_rate);
-    let context_str = format_context(&context_info);
     let update_available = claude_update::check_update_available();
 
-    // Build output based on enabled elements
     let mut parts = Vec::new();
 
     for element in &statusline_config.enabled_elements {
@@ -251,25 +222,84 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                 parts.push(format!("🤖{}", hook_data.model.display_name));
             }
             config::StatusElement::BlockCost => {
-                parts.push(format!("💰{}", block_info));
+                parts.push(format!("💰{}", format_block_info(&block)));
             }
-            config::StatusElement::TimeRemaining => {
-                if let Some(ref time) = time_remaining {
-                    parts.push(time.clone());
+            config::StatusElement::TimeRemaining5h => {
+                if let Some(time) = format_time_remaining_5h(&block, &api_usage) {
+                    parts.push(time);
+                }
+            }
+            config::StatusElement::TimeRemaining7d => {
+                if let Some(time) = format_time_remaining_7d(&api_usage) {
+                    parts.push(time);
                 }
             }
             config::StatusElement::BurnRate => {
-                parts.push(format!("🔥{}", burn_info));
+                parts.push(format!("🔥{}", format_burn_rate(&burn_rate)));
             }
             config::StatusElement::Context => {
-                parts.push(format!("🧠{}", context_str));
+                parts.push(format!("🧠{}", format_context(&context_info)));
             }
-            config::StatusElement::ApiMetrics => {
-                if let Some(api_str) = format_api_usage(&api_usage) {
-                    parts.push(format!("📊{}", api_str));
+            config::StatusElement::ApiMetrics5h => {
+                // Group all API metrics together with space separator
+                let mut api_parts = Vec::new();
+                if let Some(api) = format_api_usage_5h(&api_usage) {
+                    api_parts.push(format!("📊{}", api));
+                }
+                if statusline_config
+                    .enabled_elements
+                    .contains(&config::StatusElement::ApiMetrics7d)
+                    && let Some(api) = format_api_usage_7d(&api_usage)
+                {
+                    api_parts.push(api);
+                }
+                if statusline_config
+                    .enabled_elements
+                    .contains(&config::StatusElement::ApiMetricsSonnet)
+                    && let Some(api) = format_api_usage_sonnet(&api_usage)
+                {
+                    api_parts.push(api);
+                }
+                if !api_parts.is_empty() {
+                    parts.push(api_parts.join(" "));
                 }
             }
-            config::StatusElement::UpdateNotification => {
+            config::StatusElement::ApiMetrics7d => {
+                // Only handle if 5h not enabled (otherwise handled above)
+                if !statusline_config
+                    .enabled_elements
+                    .contains(&config::StatusElement::ApiMetrics5h)
+                {
+                    let mut api_parts = Vec::new();
+                    if let Some(api) = format_api_usage_7d(&api_usage) {
+                        api_parts.push(format!("📊{}", api));
+                    }
+                    if statusline_config
+                        .enabled_elements
+                        .contains(&config::StatusElement::ApiMetricsSonnet)
+                        && let Some(api) = format_api_usage_sonnet(&api_usage)
+                    {
+                        api_parts.push(api);
+                    }
+                    if !api_parts.is_empty() {
+                        parts.push(api_parts.join(" "));
+                    }
+                }
+            }
+            config::StatusElement::ApiMetricsSonnet => {
+                // Only handle if neither 5h nor 7d enabled
+                if !statusline_config
+                    .enabled_elements
+                    .contains(&config::StatusElement::ApiMetrics5h)
+                    && !statusline_config
+                        .enabled_elements
+                        .contains(&config::StatusElement::ApiMetrics7d)
+                    && let Some(api) = format_api_usage_sonnet(&api_usage)
+                {
+                    parts.push(format!("📊{}", api));
+                }
+            }
+            config::StatusElement::UpdateStable | config::StatusElement::UpdateLatest => {
                 if let Some(ref new_version) = update_available {
                     parts.push(format!("🔼{}", new_version));
                 }

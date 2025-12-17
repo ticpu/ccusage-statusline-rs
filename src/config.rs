@@ -1,40 +1,23 @@
 use anyhow::{Context, Result};
-use inquire::{MultiSelect, Select};
+use inquire::MultiSelect;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VersionChannel {
-    #[default]
-    Stable,
-    Latest,
-}
-
-impl VersionChannel {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Stable => "Stable (official releases)",
-            Self::Latest => "Latest (npm registry)",
-        }
-    }
-
-    fn all() -> Vec<Self> {
-        vec![Self::Stable, Self::Latest]
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusElement {
     Model,
     BlockCost,
-    TimeRemaining,
+    TimeRemaining5h,
+    TimeRemaining7d,
     BurnRate,
     Context,
-    ApiMetrics,
-    UpdateNotification,
+    ApiMetrics5h,
+    ApiMetrics7d,
+    ApiMetricsSonnet,
+    UpdateStable,
+    UpdateLatest,
     Directory,
 }
 
@@ -43,11 +26,15 @@ impl StatusElement {
         match self {
             Self::Model => "🤖 Model",
             Self::BlockCost => "💰 Block cost",
-            Self::TimeRemaining => "🕑 Time remaining",
+            Self::TimeRemaining5h => "🕑 Time remaining (5h)",
+            Self::TimeRemaining7d => "📅 Time remaining (7d)",
             Self::BurnRate => "🔥 Burn rate",
             Self::Context => "🧠 Context",
-            Self::ApiMetrics => "📊 API metrics",
-            Self::UpdateNotification => "🔼 Update notification",
+            Self::ApiMetrics5h => "📊 API metrics (5h)",
+            Self::ApiMetrics7d => "📊 API metrics (7d)",
+            Self::ApiMetricsSonnet => "📊 API metrics (Sonnet 7d)",
+            Self::UpdateStable => "🔼 Update (stable)",
+            Self::UpdateLatest => "🔼 Update (latest)",
             Self::Directory => "📁 Directory",
         }
     }
@@ -56,11 +43,15 @@ impl StatusElement {
         vec![
             Self::Model,
             Self::BlockCost,
-            Self::TimeRemaining,
+            Self::TimeRemaining5h,
+            Self::TimeRemaining7d,
             Self::BurnRate,
             Self::Context,
-            Self::ApiMetrics,
-            Self::UpdateNotification,
+            Self::ApiMetrics5h,
+            Self::ApiMetrics7d,
+            Self::ApiMetricsSonnet,
+            Self::UpdateStable,
+            Self::UpdateLatest,
             Self::Directory,
         ]
     }
@@ -69,15 +60,22 @@ impl StatusElement {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatuslineConfig {
     pub enabled_elements: Vec<StatusElement>,
-    #[serde(default)]
-    pub version_channel: VersionChannel,
 }
 
 impl Default for StatuslineConfig {
     fn default() -> Self {
         Self {
-            enabled_elements: StatusElement::all(),
-            version_channel: VersionChannel::default(),
+            enabled_elements: vec![
+                StatusElement::Model,
+                StatusElement::BlockCost,
+                StatusElement::TimeRemaining5h,
+                StatusElement::BurnRate,
+                StatusElement::Context,
+                StatusElement::ApiMetrics5h,
+                StatusElement::ApiMetrics7d,
+                StatusElement::UpdateStable,
+                StatusElement::Directory,
+            ],
         }
     }
 }
@@ -118,9 +116,6 @@ pub fn run_config_menu() -> Result<()> {
 
     let current_config = StatuslineConfig::load().unwrap_or_default();
 
-    // Status elements selection
-    println!("Use ↑/↓ to navigate, Space to select/deselect, Enter to confirm\n");
-
     let all_elements = StatusElement::all();
     let options: Vec<String> = all_elements.iter().map(|e| e.label().to_string()).collect();
 
@@ -133,7 +128,7 @@ pub fn run_config_menu() -> Result<()> {
 
     let selected = MultiSelect::new("Select elements to display:", options)
         .with_default(&default_indices)
-        .with_page_size(20)
+        .with_page_size(15)
         .prompt()?;
 
     let enabled_elements: Vec<StatusElement> = selected
@@ -141,30 +136,7 @@ pub fn run_config_menu() -> Result<()> {
         .filter_map(|label| all_elements.iter().find(|e| e.label() == label).cloned())
         .collect();
 
-    // Version channel selection
-    println!();
-    let all_channels = VersionChannel::all();
-    let channel_options: Vec<String> = all_channels.iter().map(|c| c.label().to_string()).collect();
-
-    let current_channel_idx = all_channels
-        .iter()
-        .position(|c| *c == current_config.version_channel)
-        .unwrap_or(0);
-
-    let selected_channel = Select::new("Update notification version channel:", channel_options)
-        .with_starting_cursor(current_channel_idx)
-        .prompt()?;
-
-    let version_channel = all_channels
-        .iter()
-        .find(|c| c.label() == selected_channel)
-        .copied()
-        .unwrap_or_default();
-
-    let new_config = StatuslineConfig {
-        enabled_elements,
-        version_channel,
-    };
+    let new_config = StatuslineConfig { enabled_elements };
     new_config.save()?;
 
     println!(
@@ -175,7 +147,6 @@ pub fn run_config_menu() -> Result<()> {
     for elem in &new_config.enabled_elements {
         println!("  {}", elem.label());
     }
-    println!("\nVersion channel: {}", new_config.version_channel.label());
 
     Ok(())
 }

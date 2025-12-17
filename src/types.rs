@@ -168,12 +168,14 @@ pub struct ContextInfo {
     pub percentage: u32,
 }
 
-/// API usage data from claude.ai
+/// API usage data from Anthropic API
 #[derive(Debug, Clone)]
 pub struct ApiUsageData {
     pub five_hour_percent: f64,
     pub five_hour_resets_at: Option<DateTime<Utc>>,
     pub seven_day_percent: f64,
+    pub seven_day_resets_at: Option<DateTime<Utc>>,
+    pub seven_day_sonnet_percent: f64,
 }
 
 /// Claude configuration from ~/.claude.json

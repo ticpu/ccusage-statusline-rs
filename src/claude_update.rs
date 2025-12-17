@@ -1,4 +1,4 @@
-use crate::config::{StatuslineConfig, VersionChannel};
+use crate::config::{StatusElement, StatuslineConfig};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,14 @@ const NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-
 const GCS_STABLE_URL: &str = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/stable";
 const UPDATE_CHECK_CACHE_TTL: Duration = Duration::from_secs(1800); // 30 minutes
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionChannel {
+    #[default]
+    Stable,
+    Latest,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NpmRegistryResponse {
@@ -125,14 +133,32 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     latest_v > current_v
 }
 
+/// Determine which version channel to use based on enabled elements
+fn get_version_channel() -> Option<VersionChannel> {
+    let config = StatuslineConfig::load().ok()?;
+
+    // Check which update element is enabled (prefer stable if both somehow enabled)
+    if config
+        .enabled_elements
+        .contains(&StatusElement::UpdateStable)
+    {
+        Some(VersionChannel::Stable)
+    } else if config
+        .enabled_elements
+        .contains(&StatusElement::UpdateLatest)
+    {
+        Some(VersionChannel::Latest)
+    } else {
+        None
+    }
+}
+
 /// Check if a Claude Code update is available.
 /// Returns Some(version) if an update is available, None otherwise.
 /// Caches results for 30 minutes.
 pub fn check_update_available() -> Option<String> {
+    let channel = get_version_channel()?;
     let current = get_installed_claude_version()?;
-    let channel = StatuslineConfig::load()
-        .map(|c| c.version_channel)
-        .unwrap_or_default();
 
     // Try to read cache first
     if let Some(cache) = read_cache()

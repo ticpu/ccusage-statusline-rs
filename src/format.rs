@@ -31,15 +31,13 @@ fn get_clock_emoji(remaining_hours: f64) -> &'static str {
     }
 }
 
-/// Format time remaining in block (use API timing if available, more accurate)
-pub fn format_time_remaining(block: &Block, api_usage: &Option<ApiUsageData>) -> Option<String> {
+/// Format 5-hour time remaining
+pub fn format_time_remaining_5h(block: &Block, api_usage: &Option<ApiUsageData>) -> Option<String> {
     if !block.is_active {
         return None;
     }
 
     let now = Utc::now();
-
-    // Use API reset time if available (includes web usage, more accurate)
     let remaining_hours = if let Some(api) = api_usage {
         if let Some(reset_time) = api.five_hour_resets_at {
             (reset_time - now).num_seconds() as f64 / 3600.0
@@ -50,8 +48,27 @@ pub fn format_time_remaining(block: &Block, api_usage: &Option<ApiUsageData>) ->
         block.hours_remaining.unwrap_or(0.0)
     };
 
+    Some(format_hours_remaining(remaining_hours))
+}
+
+/// Format 7-day time remaining
+pub fn format_time_remaining_7d(api_usage: &Option<ApiUsageData>) -> Option<String> {
+    let now = Utc::now();
+
+    if let Some(api) = api_usage
+        && let Some(reset_time) = api.seven_day_resets_at
+    {
+        let remaining_hours = (reset_time - now).num_seconds() as f64 / 3600.0;
+        Some(format_days_remaining(remaining_hours))
+    } else {
+        None
+    }
+}
+
+/// Format hours remaining with clock emoji
+fn format_hours_remaining(remaining_hours: f64) -> String {
     if remaining_hours <= 0.0 {
-        return Some(format!("{}0h", get_clock_emoji(0.0)));
+        return format!("{}0h", get_clock_emoji(0.0));
     }
 
     let hours = remaining_hours.floor() as i64;
@@ -59,11 +76,29 @@ pub fn format_time_remaining(block: &Block, api_usage: &Option<ApiUsageData>) ->
     let clock = get_clock_emoji(remaining_hours);
 
     if hours > 0 && mins > 0 {
-        Some(format!("{}{}h{}m", clock, hours, mins))
+        format!("{}{}h{}m", clock, hours, mins)
     } else if hours > 0 {
-        Some(format!("{}{}h", clock, hours))
+        format!("{}{}h", clock, hours)
     } else {
-        Some(format!("{}{}m", clock, mins))
+        format!("{}{}m", clock, mins)
+    }
+}
+
+/// Format days remaining for weekly reset
+fn format_days_remaining(remaining_hours: f64) -> String {
+    if remaining_hours <= 0.0 {
+        return "📅0d".to_string();
+    }
+
+    let days = (remaining_hours / 24.0).floor() as i64;
+    let hours = (remaining_hours % 24.0).floor() as i64;
+
+    if days > 0 && hours > 0 {
+        format!("📅{}d{}h", days, hours)
+    } else if days > 0 {
+        format!("📅{}d", days)
+    } else {
+        format!("📅{}h", hours)
     }
 }
 
@@ -124,18 +159,27 @@ fn decimal_to_block(value: f64) -> char {
     }
 }
 
-/// Format API usage data
-pub fn format_api_usage(api_usage: &Option<ApiUsageData>) -> Option<String> {
+/// Format 5h API usage
+pub fn format_api_usage_5h(api_usage: &Option<ApiUsageData>) -> Option<String> {
     api_usage.as_ref().map(|api| {
         let five_hour_int = api.five_hour_percent as u32;
         let five_hour_block = decimal_to_block(api.five_hour_percent);
-        let seven_day_int = api.seven_day_percent as u32;
-
-        format!(
-            "5h:{}%{}7d:{}%",
-            five_hour_int, five_hour_block, seven_day_int
-        )
+        format!("5h:{}%{}", five_hour_int, five_hour_block)
     })
+}
+
+/// Format 7d API usage
+pub fn format_api_usage_7d(api_usage: &Option<ApiUsageData>) -> Option<String> {
+    api_usage
+        .as_ref()
+        .map(|api| format!("7d:{}%", api.seven_day_percent as u32))
+}
+
+/// Format Sonnet 7d API usage
+pub fn format_api_usage_sonnet(api_usage: &Option<ApiUsageData>) -> Option<String> {
+    api_usage
+        .as_ref()
+        .map(|api| format!("S7d:{}%", api.seven_day_sonnet_percent as u32))
 }
 
 /// Format directory path with home replacement and color
