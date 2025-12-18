@@ -35,11 +35,9 @@ struct DistTags {
 struct UpdateCache {
     latest_version: Option<String>,
     checked_at: DateTime<Utc>,
-    #[serde(default)]
-    channel: VersionChannel,
 }
 
-fn get_cache_path() -> Result<PathBuf> {
+fn get_cache_path(channel: VersionChannel) -> Result<PathBuf> {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .or_else(|_| -> Result<String, std::env::VarError> {
             let uid = unsafe { libc::getuid() };
@@ -47,17 +45,22 @@ fn get_cache_path() -> Result<PathBuf> {
         })
         .context("Failed to determine XDG_RUNTIME_DIR")?;
 
-    Ok(PathBuf::from(runtime_dir).join("ccusage-claude-update-cache.json"))
+    let filename = match channel {
+        VersionChannel::Stable => "ccusage-update-stable.json",
+        VersionChannel::Latest => "ccusage-update-latest.json",
+    };
+
+    Ok(PathBuf::from(runtime_dir).join(filename))
 }
 
-fn read_cache() -> Option<UpdateCache> {
-    let cache_path = get_cache_path().ok()?;
+fn read_cache(channel: VersionChannel) -> Option<UpdateCache> {
+    let cache_path = get_cache_path(channel).ok()?;
     let contents = fs::read_to_string(cache_path).ok()?;
     serde_json::from_str(&contents).ok()
 }
 
-fn write_cache(cache: &UpdateCache) -> Result<()> {
-    let cache_path = get_cache_path()?;
+fn write_cache(channel: VersionChannel, cache: &UpdateCache) -> Result<()> {
+    let cache_path = get_cache_path(channel)?;
     let contents = serde_json::to_string(cache)?;
     fs::write(cache_path, contents)?;
     Ok(())
@@ -155,17 +158,15 @@ fn get_version_channel() -> Option<VersionChannel> {
 
 /// Check if a Claude Code update is available.
 /// Returns Some(version) if an update is available, None otherwise.
-/// Caches results for 30 minutes.
+/// Caches results for 30 minutes per channel.
 pub fn check_update_available() -> Option<String> {
     let channel = get_version_channel()?;
     let current = get_installed_claude_version()?;
 
     // Try to read cache first
-    if let Some(cache) = read_cache()
+    if let Some(cache) = read_cache(channel)
         && is_cache_fresh(&cache)
-        && cache.channel == channel
     {
-        // Use cached result (same channel)
         if let Some(ref latest) = cache.latest_version
             && compare_versions(&current, latest)
         {
@@ -174,19 +175,12 @@ pub fn check_update_available() -> Option<String> {
         return None;
     }
 
-    // Cache miss, stale, or channel changed - fetch new data
+    // Cache miss or stale - fetch new data
     let latest_version = match fetch_latest_version(channel) {
         Ok(version) => Some(version),
         Err(_) => {
-            // Fail silently like Claude Code does
-            // Use old cache if available and same channel
-            if let Some(cache) = read_cache()
-                && cache.channel == channel
-            {
-                cache.latest_version
-            } else {
-                None
-            }
+            // Fail silently, use old cache if available
+            read_cache(channel).and_then(|c| c.latest_version)
         }
     };
 
@@ -194,9 +188,8 @@ pub fn check_update_available() -> Option<String> {
     let new_cache = UpdateCache {
         latest_version: latest_version.clone(),
         checked_at: Utc::now(),
-        channel,
     };
-    let _ = write_cache(&new_cache); // Ignore write errors
+    let _ = write_cache(channel, &new_cache);
 
     // Check if update available
     if let Some(ref latest) = latest_version
