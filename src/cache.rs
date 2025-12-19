@@ -25,7 +25,7 @@ pub fn try_get_cached(cache_path: &Path, transcript_path: &str) -> Result<Option
     };
 
     // Try to acquire shared lock (non-blocking)
-    if file.try_lock_shared().is_err() {
+    if FileExt::try_lock_shared(&file).is_err() {
         return Ok(None);
     }
 
@@ -84,7 +84,7 @@ pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> R
     let json = serde_json::to_string(&semaphore)?;
     file.write_all(json.as_bytes())?;
 
-    file.unlock()?;
+    FileExt::unlock(&file)?;
     Ok(())
 }
 

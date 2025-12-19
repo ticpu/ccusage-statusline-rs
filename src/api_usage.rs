@@ -88,14 +88,14 @@ fn fetch_usage_with_lock() -> Result<ApiUsageData> {
         Ok(()) => {
             // We have exclusive access - check cache and fetch if stale
             let result = fetch_or_use_cache(&mut file, &cache_path);
-            file.unlock()?;
+            FileExt::unlock(&file)?;
             result
         }
         Err(e) if e.kind() == ErrorKind::WouldBlock => {
             // Another process is fetching - wait with shared lock and read cache
-            file.lock_shared()?;
+            FileExt::lock_shared(&file)?;
             let result = read_cache_from_file(&mut file);
-            file.unlock()?;
+            FileExt::unlock(&file)?;
             result.context("Cache unavailable while another process is fetching")
         }
         Err(e) => Err(e.into()),
@@ -297,9 +297,9 @@ mod tests {
                 .write(true)
                 .open(&*cache_path_writer)
                 .unwrap();
-            file.lock_exclusive().unwrap();
+            FileExt::lock_exclusive(&file).unwrap();
             thread::sleep(Duration::from_millis(100));
-            file.unlock().unwrap();
+            FileExt::unlock(&file).unwrap();
         });
 
         // Reader thread: waits with shared lock
@@ -307,12 +307,12 @@ mod tests {
         thread::sleep(Duration::from_millis(10)); // Let writer acquire lock first
         let reader = thread::spawn(move || {
             let mut file = File::open(&*cache_path_reader).unwrap();
-            file.lock_shared().unwrap(); // Should block until writer releases
+            FileExt::lock_shared(&file).unwrap(); // Should block until writer releases
             let mut contents = String::new();
             file.read_to_string(&mut contents).unwrap();
             assert!(!contents.is_empty());
             assert!(serde_json::from_str::<ApiResponse>(&contents).is_ok());
-            file.unlock().unwrap();
+            FileExt::unlock(&file).unwrap();
         });
 
         writer.join().unwrap();
@@ -342,10 +342,10 @@ mod tests {
                     .write(true)
                     .open(&*cache_path_thread)
                     .unwrap();
-                if file.try_lock_exclusive().is_ok() {
+                if FileExt::try_lock_exclusive(&file).is_ok() {
                     *count.lock().unwrap() += 1;
                     thread::sleep(Duration::from_millis(50));
-                    file.unlock().unwrap();
+                    FileExt::unlock(&file).unwrap();
                 }
             });
             handles.push(handle);
