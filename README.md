@@ -2,24 +2,27 @@
 
 Ultra-fast Rust implementation of Claude Code usage statusline.
 
+![Status Line Example](docs/images/status-line.png)
+
 ## Description
 
 High-performance statusline for Claude Code that displays real-time usage metrics, billing blocks, and burn rates. Written in Rust for sub-millisecond response times with intelligent caching.
 
 ## Features
 
-- ⚡ **Ultra-fast performance** - 15x faster than Node.js implementation (8ms vs 120ms warm)
-- 📊 **Live API integration** - Real-time 5-hour and 7-day utilization from claude.ai API
-- 🔼 **Update notifications** - Checks npm registry for Claude Code updates (30-min cache)
-- 🕑 **Time remaining** - Shows time left in billing block with clock emoji easter egg
-- ⚙️ **Interactive configuration** - Menu-based UI to enable/disable statusline elements
-- 🖥️ **Interactive mode** - Works as standalone tool or piped statusline
-- 🦊 **Firefox cookie extraction** - Automatic authentication using Firefox profile
-- 💰 **Accurate cost tracking** - Fetches daily pricing from LiteLLM, supports tiered pricing
-- 🔄 **Smart caching** - XDG_RUNTIME_DIR-based caching with 24-hour pricing cache
-- 🎯 **5-hour block tracking** - Matches Claude's billing cycles exactly
-- 🧮 **Deduplication** - Prevents double-counting duplicate JSONL entries
-- 🔥 **Burn rate monitoring** - Real-time cost per hour with visual indicators
+- **Ultra-fast performance** - 15x faster than Node.js implementation (8ms vs 120ms warm)
+- **Live API integration** - Real-time 5-hour and 7-day utilization via Claude Code OAuth
+- **Update notifications** - Checks for Claude Code updates with configurable channels (stable/latest)
+- **Time remaining** - Shows time left in billing block with clock emoji easter egg
+- **Interactive configuration** - Menu-based UI to enable/disable statusline elements
+- **Interactive mode** - Works as standalone tool or piped statusline
+- **OAuth authentication** - Uses Claude Code's native OAuth tokens from ~/.claude/.credentials.json
+- **Accurate cost tracking** - Fetches daily pricing from LiteLLM, supports tiered pricing
+- **Smart caching** - XDG_RUNTIME_DIR-based caching with 24-hour pricing cache
+- **5-hour block tracking** - Matches Claude's billing cycles exactly
+- **Deduplication** - Prevents double-counting duplicate JSONL entries
+- **Burn rate monitoring** - Real-time cost per hour with visual indicators
+- **Auto-install** - Creates ~/.claude/settings.json if missing during install
 
 ## Inspiration
 
@@ -71,8 +74,11 @@ Configure which elements to display:
 ccusage-statusline-rs config
 ```
 
+![Configuration Menu](docs/images/config.png)
+
 This opens an interactive menu where you can:
 - Enable/disable individual elements (Model, Block cost, Time remaining, etc.)
+- Choose update notification channel (stable/latest/off)
 - Configuration persists in `~/.claude/ccusage-statusline-config.json`
 
 ### Manual Configuration (Not Recommended)
