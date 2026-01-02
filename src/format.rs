@@ -147,7 +147,7 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
         rate_str.green().to_string()
     };
 
-    format!("🔥{}{}", colored_rate, limit)
+    format!("🔥\u{200B}{}{}", colored_rate, limit)
 }
 
 /// Format context information
