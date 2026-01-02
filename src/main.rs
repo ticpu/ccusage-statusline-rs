@@ -128,7 +128,7 @@ fn run_interactive_mode() -> Result<()> {
         parts.push(time);
     }
 
-    parts.push(format!("🔥{}", format_burn_rate(&burn_rate, plan_type)));
+    parts.push(format_burn_rate(&burn_rate, plan_type));
 
     if api_result.is_stale() {
         parts.push("📊(api error)".to_string());
@@ -241,7 +241,7 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                 }
             }
             config::StatusElement::BurnRate => {
-                parts.push(format!("🔥{}", format_burn_rate(&burn_rate, plan_type)));
+                parts.push(format_burn_rate(&burn_rate, plan_type));
             }
             config::StatusElement::Context => {
                 parts.push(format!("🧠{}", format_context(&context_info)));
@@ -431,22 +431,35 @@ fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -
         block.cost_usd,
     );
 
-    let seven_day_ratio = calculate_limit_ratio(
-        api_usage.seven_day_percent,
-        api_usage.seven_day_resets_at,
-        cost_per_hour,
-        block.cost_usd,
-    );
+    // For 7-day, we can't estimate cap from 5h block cost - use percentage directly
+    // 80% usage = 0.8 ratio (warning), 100% = 1.0 ratio (at limit)
+    let seven_day_ratio = (api_usage.seven_day_percent / 100.0, 0.0);
 
     // Determine critical limit (prioritize 5h over 7d)
     let (critical_limit, ratio, reset_at) = if five_hour_ratio.0 >= 0.8 {
-        (LimitType::FiveHour, five_hour_ratio.0, api_usage.five_hour_resets_at)
+        (
+            LimitType::FiveHour,
+            five_hour_ratio.0,
+            api_usage.five_hour_resets_at,
+        )
     } else if seven_day_ratio.0 >= 0.8 {
-        (LimitType::SevenDay, seven_day_ratio.0, api_usage.seven_day_resets_at)
+        (
+            LimitType::SevenDay,
+            seven_day_ratio.0,
+            api_usage.seven_day_resets_at,
+        )
     } else if five_hour_ratio.0 > 0.0 {
-        (LimitType::FiveHour, five_hour_ratio.0, api_usage.five_hour_resets_at)
+        (
+            LimitType::FiveHour,
+            five_hour_ratio.0,
+            api_usage.five_hour_resets_at,
+        )
     } else if seven_day_ratio.0 > 0.0 {
-        (LimitType::SevenDay, seven_day_ratio.0, api_usage.seven_day_resets_at)
+        (
+            LimitType::SevenDay,
+            seven_day_ratio.0,
+            api_usage.seven_day_resets_at,
+        )
     } else {
         (LimitType::None, 0.0, None)
     };

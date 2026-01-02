@@ -123,13 +123,9 @@ fn format_duration(duration: Duration) -> String {
 pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
     if burn_rate.is_at_limit {
         if let Some(reset) = burn_rate.reset_in {
-            return format!("🚫 {}", format_duration(reset));
+            return format!("🔥limit {}", format_duration(reset));
         }
-        return "🚫".to_string();
-    }
-
-    if burn_rate.ratio < 0.8 {
-        return "✓".to_string();
+        return "🔥limit".to_string();
     }
 
     let limit = match burn_rate.critical_limit {
@@ -145,11 +141,13 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
 
     let colored_rate = if burn_rate.ratio >= 1.0 {
         rate_str.red().to_string()
-    } else {
+    } else if burn_rate.ratio >= 0.8 {
         rate_str.yellow().to_string()
+    } else {
+        rate_str.green().to_string()
     };
 
-    format!("{}{}", colored_rate, limit)
+    format!("🔥{}{}", colored_rate, limit)
 }
 
 /// Format context information
@@ -295,11 +293,12 @@ mod tests {
         let safe_burn = BurnRate {
             cost_per_hour: 1.5,
             ratio: 0.5,
-            critical_limit: LimitType::None,
+            critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
         };
-        assert_eq!(format_burn_rate(&safe_burn, PlanType::Api), "✓");
+        assert!(format_burn_rate(&safe_burn, PlanType::Api).contains("$1.50/h"));
+        assert!(format_burn_rate(&safe_burn, PlanType::Subscription).contains("0.5x"));
 
         let warning_burn = BurnRate {
             cost_per_hour: 10.0,
