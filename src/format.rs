@@ -1,5 +1,5 @@
-use crate::types::{ApiUsageData, Block, BurnRate, ContextInfo};
-use chrono::Utc;
+use crate::types::{ApiUsageData, Block, BurnRate, ContextInfo, LimitType, PlanType};
+use chrono::{Duration, Utc};
 use num_format::{Locale, ToFormattedString};
 use owo_colors::OwoColorize;
 
@@ -102,17 +102,52 @@ fn format_days_remaining(remaining_hours: f64) -> String {
     }
 }
 
-/// Format burn rate with emoji indicator
-pub fn format_burn_rate(burn_rate: &BurnRate) -> String {
-    let emoji = if burn_rate.tokens_per_minute < 2000 {
-        "🟢".green().to_string()
-    } else if burn_rate.tokens_per_minute < 5000 {
-        "⚠️".yellow().to_string()
+/// Format duration in human readable form
+fn format_duration(duration: Duration) -> String {
+    let total_seconds = duration.num_seconds();
+    if total_seconds < 0 {
+        return "0m".to_string();
+    }
+
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+
+    if hours > 0 {
+        format!("{}h{}m", hours, minutes)
     } else {
-        "🚨".red().to_string()
+        format!("{}m", minutes)
+    }
+}
+
+/// Format burn rate with emoji indicator
+pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
+    if burn_rate.is_at_limit {
+        if let Some(reset) = burn_rate.reset_in {
+            return format!("🚫 {}", format_duration(reset));
+        }
+        return "🚫".to_string();
+    }
+
+    if burn_rate.ratio < 0.8 {
+        return "✓".to_string();
+    }
+
+    let warn = if burn_rate.ratio >= 1.0 {
+        "🚨"
+    } else {
+        ""
     };
 
-    format!("{}/h {}", format_currency(burn_rate.cost_per_hour), emoji)
+    let limit = match burn_rate.critical_limit {
+        LimitType::FiveHour => " 5h",
+        LimitType::SevenDay => " 7d",
+        LimitType::None => "",
+    };
+
+    match plan_type {
+        PlanType::Api => format!("{}/h{} {}", format_currency(burn_rate.cost_per_hour), limit, warn).trim().to_string(),
+        PlanType::Subscription => format!("{:.1}x{} {}", burn_rate.ratio, limit, warn).trim().to_string(),
+    }
 }
 
 /// Format context information
@@ -255,16 +290,33 @@ mod tests {
 
     #[test]
     fn test_format_burn_rate() {
-        let low_burn = BurnRate {
+        let safe_burn = BurnRate {
             cost_per_hour: 1.5,
-            tokens_per_minute: 1000,
+            ratio: 0.5,
+            critical_limit: LimitType::None,
+            is_at_limit: false,
+            reset_in: None,
         };
-        assert!(format_burn_rate(&low_burn).contains("$1.50/h"));
+        assert_eq!(format_burn_rate(&safe_burn, PlanType::Api), "✓");
 
-        let high_burn = BurnRate {
+        let warning_burn = BurnRate {
             cost_per_hour: 10.0,
-            tokens_per_minute: 6000,
+            ratio: 0.9,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: None,
         };
-        assert!(format_burn_rate(&high_burn).contains("$10.00/h"));
+        assert!(format_burn_rate(&warning_burn, PlanType::Api).contains("$10.00/h"));
+        assert!(format_burn_rate(&warning_burn, PlanType::Api).contains("5h"));
+
+        let danger_burn = BurnRate {
+            cost_per_hour: 15.0,
+            ratio: 1.4,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: None,
+        };
+        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("1.4x"));
+        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("🚨"));
     }
 }

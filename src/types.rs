@@ -154,11 +154,29 @@ pub struct Block {
     pub hours_remaining: Option<f64>,
 }
 
+/// Which limit is critical
+#[derive(Debug, PartialEq)]
+pub enum LimitType {
+    FiveHour,
+    SevenDay,
+    None,
+}
+
+/// User's plan type
+#[derive(Debug, Clone, Copy)]
+pub enum PlanType {
+    Api,
+    Subscription,
+}
+
 /// Burn rate information
 #[derive(Debug)]
 pub struct BurnRate {
     pub cost_per_hour: f64,
-    pub tokens_per_minute: u64,
+    pub ratio: f64,
+    pub critical_limit: LimitType,
+    pub is_at_limit: bool,
+    pub reset_in: Option<chrono::Duration>,
 }
 
 /// Context information

@@ -33,6 +33,8 @@ struct ClaudeCredentials {
 struct OAuthCredentials {
     #[serde(rename = "accessToken")]
     access_token: String,
+    #[serde(rename = "subscriptionType")]
+    subscription_type: Option<String>,
 }
 
 /// Cache is considered fresh for 30 seconds (avoid hammering API)
@@ -90,6 +92,31 @@ fn read_oauth_credentials() -> Result<String> {
         .claude_ai_oauth
         .map(|oauth| oauth.access_token)
         .context("No OAuth credentials found - run 'claude' to login")
+}
+
+/// Get plan type from Claude credentials
+pub fn get_plan_type() -> crate::types::PlanType {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return crate::types::PlanType::Api,
+    };
+
+    let creds_path = PathBuf::from(&home).join(".claude/.credentials.json");
+
+    let content = match fs::read_to_string(&creds_path) {
+        Ok(c) => c,
+        Err(_) => return crate::types::PlanType::Api,
+    };
+
+    let creds: ClaudeCredentials = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return crate::types::PlanType::Api,
+    };
+
+    match creds.claude_ai_oauth {
+        Some(oauth) if oauth.subscription_type.is_some() => crate::types::PlanType::Subscription,
+        _ => crate::types::PlanType::Api,
+    }
 }
 
 /// Fetch usage data from Anthropic API with filesystem-based caching and advisory locks

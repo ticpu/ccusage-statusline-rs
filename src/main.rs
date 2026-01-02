@@ -12,14 +12,14 @@ mod types;
 use anyhow::{Context, Result};
 use blocks::find_active_block;
 use cache::{get_cache_dir, try_get_cached, update_cache};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use format::*;
 use pricing::PricingFetcher;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read};
 use std::path::PathBuf;
-use types::{BurnRate, ClaudeConfig, ContextInfo, HookData, UsageData};
+use types::{ApiUsageData, BurnRate, ClaudeConfig, ContextInfo, HookData, UsageData};
 
 /// Context limit when autoCompactEnabled=true (Claude compacts context before reaching 100%)
 const COMPACTED_CONTEXT_LIMIT: u64 = 155_000;
@@ -111,13 +111,14 @@ fn run_interactive_mode() -> Result<()> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
+    let plan_type = api_usage::get_plan_type();
     let api_result = api_usage::fetch_usage();
     let api_usage = api_result.data().cloned();
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
     let block = find_active_block(&claude_paths, &pricing)?;
-    let burn_rate = calculate_burn_rate(&block)?;
+    let burn_rate = calculate_burn_rate(&block, api_usage.as_ref())?;
 
     let mut parts = Vec::new();
 
@@ -127,7 +128,7 @@ fn run_interactive_mode() -> Result<()> {
         parts.push(time);
     }
 
-    parts.push(format!("🔥{}", format_burn_rate(&burn_rate)));
+    parts.push(format!("🔥{}", format_burn_rate(&burn_rate, plan_type)));
 
     if api_result.is_stale() {
         parts.push("📊(api error)".to_string());
@@ -207,6 +208,7 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
+    let plan_type = api_usage::get_plan_type();
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
     let api_result = api_usage::fetch_usage();
     let api_usage = api_result.data().cloned();
@@ -214,7 +216,7 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
     let block = find_active_block(&claude_paths, &pricing)?;
-    let burn_rate = calculate_burn_rate(&block)?;
+    let burn_rate = calculate_burn_rate(&block, api_usage.as_ref())?;
     let context_info = calculate_context_tokens(&hook_data.transcript_path, &hook_data.model.id)?;
     let update_available = claude_update::check_update_available();
 
@@ -239,7 +241,7 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                 }
             }
             config::StatusElement::BurnRate => {
-                parts.push(format!("🔥{}", format_burn_rate(&burn_rate)));
+                parts.push(format!("🔥{}", format_burn_rate(&burn_rate, plan_type)));
             }
             config::StatusElement::Context => {
                 parts.push(format!("🧠{}", format_context(&context_info)));
@@ -379,11 +381,16 @@ fn get_context_limit() -> u64 {
 }
 
 /// Calculate burn rate for a block
-fn calculate_burn_rate(block: &types::Block) -> Result<BurnRate> {
+fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -> Result<BurnRate> {
+    use types::LimitType;
+
     if !block.is_active {
         return Ok(BurnRate {
             cost_per_hour: 0.0,
-            tokens_per_minute: 0,
+            ratio: 0.0,
+            critical_limit: LimitType::None,
+            is_at_limit: false,
+            reset_in: None,
         });
     }
 
@@ -393,17 +400,111 @@ fn calculate_burn_rate(block: &types::Block) -> Result<BurnRate> {
     if elapsed <= 0.0 {
         return Ok(BurnRate {
             cost_per_hour: 0.0,
-            tokens_per_minute: 0,
+            ratio: 0.0,
+            critical_limit: LimitType::None,
+            is_at_limit: false,
+            reset_in: None,
         });
     }
 
     let cost_per_hour = (block.cost_usd / elapsed) * 60.0;
-    let tokens_per_minute = ((block.total_tokens as f64) / elapsed) as u64;
+
+    // If no API data, return basic burn rate
+    let api_usage = match api_usage {
+        Some(api) => api,
+        None => {
+            return Ok(BurnRate {
+                cost_per_hour,
+                ratio: 0.0,
+                critical_limit: LimitType::None,
+                is_at_limit: false,
+                reset_in: None,
+            });
+        }
+    };
+
+    // Calculate ratios for both limits
+    let five_hour_ratio = calculate_limit_ratio(
+        api_usage.five_hour_percent,
+        api_usage.five_hour_resets_at,
+        cost_per_hour,
+        block.cost_usd,
+    );
+
+    let seven_day_ratio = calculate_limit_ratio(
+        api_usage.seven_day_percent,
+        api_usage.seven_day_resets_at,
+        cost_per_hour,
+        block.cost_usd,
+    );
+
+    // Determine critical limit (prioritize 5h over 7d)
+    let (critical_limit, ratio, reset_at) = if five_hour_ratio.0 >= 0.8 {
+        (LimitType::FiveHour, five_hour_ratio.0, api_usage.five_hour_resets_at)
+    } else if seven_day_ratio.0 >= 0.8 {
+        (LimitType::SevenDay, seven_day_ratio.0, api_usage.seven_day_resets_at)
+    } else if five_hour_ratio.0 > 0.0 {
+        (LimitType::FiveHour, five_hour_ratio.0, api_usage.five_hour_resets_at)
+    } else if seven_day_ratio.0 > 0.0 {
+        (LimitType::SevenDay, seven_day_ratio.0, api_usage.seven_day_resets_at)
+    } else {
+        (LimitType::None, 0.0, None)
+    };
+
+    // Check if at limit
+    let is_at_limit = api_usage.five_hour_percent >= 100.0 || api_usage.seven_day_percent >= 100.0;
+
+    let reset_in = reset_at.map(|reset| reset - now);
 
     Ok(BurnRate {
         cost_per_hour,
-        tokens_per_minute,
+        ratio,
+        critical_limit,
+        is_at_limit,
+        reset_in,
     })
+}
+
+/// Calculate ratio for a single limit
+fn calculate_limit_ratio(
+    current_percent: f64,
+    resets_at: Option<DateTime<Utc>>,
+    cost_per_hour: f64,
+    block_cost: f64,
+) -> (f64, f64) {
+    if current_percent <= 0.0 || current_percent >= 100.0 {
+        return (0.0, 0.0);
+    }
+
+    let reset_time = match resets_at {
+        Some(t) => t,
+        None => return (0.0, 0.0),
+    };
+
+    let now = Utc::now();
+    let hours_until_reset = (reset_time - now).num_seconds() as f64 / 3600.0;
+
+    if hours_until_reset <= 0.0 {
+        return (0.0, 0.0);
+    }
+
+    // Estimate cap from current usage
+    let estimated_cap = if current_percent > 0.0 {
+        block_cost / (current_percent / 100.0)
+    } else {
+        return (0.0, 0.0);
+    };
+
+    let remaining_capacity = estimated_cap * (1.0 - current_percent / 100.0);
+    let safe_rate = remaining_capacity / hours_until_reset;
+
+    let ratio = if safe_rate > 0.0 {
+        cost_per_hour / safe_rate
+    } else {
+        0.0
+    };
+
+    (ratio, safe_rate)
 }
 
 /// Calculate context tokens from transcript
