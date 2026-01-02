@@ -101,6 +101,7 @@ Replace `/path/to/` with the actual path to the binary.
 - **Rust**: ~8ms average (consistent across all runs)
 - **Node.js warm**: ~120ms average (after JIT warmup)
 - **Speedup**: 15x faster
+- **CI enforced**: Unit tests verify <20ms execution time
 
 ## License
 

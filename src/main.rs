@@ -111,7 +111,8 @@ fn run_interactive_mode() -> Result<()> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
-    let api_usage = api_usage::fetch_usage();
+    let api_result = api_usage::fetch_usage();
+    let api_usage = api_result.data().cloned();
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
@@ -128,11 +129,13 @@ fn run_interactive_mode() -> Result<()> {
 
     parts.push(format!("🔥{}", format_burn_rate(&burn_rate)));
 
-    if let Some(api) = format_api_usage_5h(&api_usage) {
+    if api_result.is_stale() {
+        parts.push("📊(api error)".to_string());
+    } else if let Some(api) = format_api_usage_5h(&api_usage) {
         parts.push(format!("📊{}", api));
-    }
-    if let Some(api) = format_api_usage_7d(&api_usage) {
-        parts.push(api);
+        if let Some(api) = format_api_usage_7d(&api_usage) {
+            parts.push(api);
+        }
     }
 
     println!("{}", parts.join(" │ "));
@@ -205,7 +208,8 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
-    let api_usage = api_usage::fetch_usage();
+    let api_result = api_usage::fetch_usage();
+    let api_usage = api_result.data().cloned();
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
@@ -241,38 +245,20 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                 parts.push(format!("🧠{}", format_context(&context_info)));
             }
             config::StatusElement::ApiMetrics5h => {
-                // Group all API metrics together with space separator
-                let mut api_parts = Vec::new();
-                if let Some(api) = format_api_usage_5h(&api_usage) {
-                    api_parts.push(format!("📊{}", api));
-                }
-                if statusline_config
-                    .enabled_elements
-                    .contains(&config::StatusElement::ApiMetrics7d)
-                    && let Some(api) = format_api_usage_7d(&api_usage)
-                {
-                    api_parts.push(api);
-                }
-                if statusline_config
-                    .enabled_elements
-                    .contains(&config::StatusElement::ApiMetricsSonnet)
-                    && let Some(api) = format_api_usage_sonnet(&api_usage)
-                {
-                    api_parts.push(api);
-                }
-                if !api_parts.is_empty() {
-                    parts.push(api_parts.join(" "));
-                }
-            }
-            config::StatusElement::ApiMetrics7d => {
-                // Only handle if 5h not enabled (otherwise handled above)
-                if !statusline_config
-                    .enabled_elements
-                    .contains(&config::StatusElement::ApiMetrics5h)
-                {
+                if api_result.is_stale() {
+                    parts.push("📊(api error)".to_string());
+                } else {
+                    // Group all API metrics together with space separator
                     let mut api_parts = Vec::new();
-                    if let Some(api) = format_api_usage_7d(&api_usage) {
+                    if let Some(api) = format_api_usage_5h(&api_usage) {
                         api_parts.push(format!("📊{}", api));
+                    }
+                    if statusline_config
+                        .enabled_elements
+                        .contains(&config::StatusElement::ApiMetrics7d)
+                        && let Some(api) = format_api_usage_7d(&api_usage)
+                    {
+                        api_parts.push(api);
                     }
                     if statusline_config
                         .enabled_elements
@@ -286,6 +272,32 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                     }
                 }
             }
+            config::StatusElement::ApiMetrics7d => {
+                // Only handle if 5h not enabled (otherwise handled above)
+                if !statusline_config
+                    .enabled_elements
+                    .contains(&config::StatusElement::ApiMetrics5h)
+                {
+                    if api_result.is_stale() {
+                        parts.push("📊(api error)".to_string());
+                    } else {
+                        let mut api_parts = Vec::new();
+                        if let Some(api) = format_api_usage_7d(&api_usage) {
+                            api_parts.push(format!("📊{}", api));
+                        }
+                        if statusline_config
+                            .enabled_elements
+                            .contains(&config::StatusElement::ApiMetricsSonnet)
+                            && let Some(api) = format_api_usage_sonnet(&api_usage)
+                        {
+                            api_parts.push(api);
+                        }
+                        if !api_parts.is_empty() {
+                            parts.push(api_parts.join(" "));
+                        }
+                    }
+                }
+            }
             config::StatusElement::ApiMetricsSonnet => {
                 // Only handle if neither 5h nor 7d enabled
                 if !statusline_config
@@ -294,9 +306,12 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                     && !statusline_config
                         .enabled_elements
                         .contains(&config::StatusElement::ApiMetrics7d)
-                    && let Some(api) = format_api_usage_sonnet(&api_usage)
                 {
-                    parts.push(format!("📊{}", api));
+                    if api_result.is_stale() {
+                        parts.push("📊(api error)".to_string());
+                    } else if let Some(api) = format_api_usage_sonnet(&api_usage) {
+                        parts.push(format!("📊{}", api));
+                    }
                 }
             }
             config::StatusElement::UpdateStable | config::StatusElement::UpdateLatest => {
@@ -429,7 +444,33 @@ fn calculate_context_tokens(transcript_path: &str, _model_id: &str) -> Result<Op
 
 #[cfg(test)]
 mod tests {
-    use super::{COMPACTED_CONTEXT_LIMIT, FULL_CONTEXT_LIMIT};
+    use super::*;
+
+    #[test]
+    fn test_performance_under_20ms() {
+        // Warmup (populates caches)
+        let _ = run_interactive_mode();
+
+        let iterations = 10;
+        let mut total_duration = std::time::Duration::ZERO;
+
+        for _ in 0..iterations {
+            let start = std::time::Instant::now();
+            let _ = run_interactive_mode();
+            total_duration += start.elapsed();
+        }
+
+        let avg_ms = total_duration.as_millis() / iterations as u128;
+        eprintln!("Average execution time: {}ms (cached)", avg_ms);
+        // CI has no OAuth credentials so API returns immediately
+        let threshold = if cfg!(debug_assertions) { 100 } else { 20 };
+        assert!(
+            avg_ms <= threshold,
+            "Average {}ms exceeds {}ms target",
+            avg_ms,
+            threshold
+        );
+    }
 
     #[test]
     fn test_context_calculation_with_caching_compacted() {

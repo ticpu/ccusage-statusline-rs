@@ -35,7 +35,37 @@ struct OAuthCredentials {
     access_token: String,
 }
 
+/// Cache is considered fresh for 30 seconds (avoid hammering API)
 const CACHE_TTL_SECS: u64 = 30;
+
+/// Cache is considered stale (unusable) after 5 minutes - show error instead
+const MAX_CACHE_AGE_SECS: u64 = 300;
+
+/// Result of API usage fetch
+#[derive(Debug)]
+pub enum ApiUsageResult {
+    /// Valid, fresh data
+    Ok(ApiUsageData),
+    /// Cache is too old and fetch failed - show error to user
+    StaleCache,
+    /// API not configured (no OAuth credentials) - show nothing
+    Unavailable,
+}
+
+impl ApiUsageResult {
+    /// Convert to Option<ApiUsageData> for backward compatibility
+    pub fn data(&self) -> Option<&ApiUsageData> {
+        match self {
+            ApiUsageResult::Ok(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Check if this is a stale cache error (should show error indicator)
+    pub fn is_stale(&self) -> bool {
+        matches!(self, ApiUsageResult::StaleCache)
+    }
+}
 
 /// Get API cache file path
 fn get_api_cache_path() -> Result<PathBuf> {
@@ -63,12 +93,28 @@ fn read_oauth_credentials() -> Result<String> {
 }
 
 /// Fetch usage data from Anthropic API with filesystem-based caching and advisory locks
-pub fn fetch_usage() -> Option<ApiUsageData> {
+pub fn fetch_usage() -> ApiUsageResult {
     match fetch_usage_with_lock() {
-        Ok(data) => Some(data),
+        Ok(data) => ApiUsageResult::Ok(data),
         Err(e) => {
             eprintln!("Failed to fetch API usage: {}", e);
-            None
+            // Check if we have credentials at all
+            if read_oauth_credentials().is_err() {
+                return ApiUsageResult::Unavailable;
+            }
+            // Check cache age - if too old, report error
+            if let Ok(cache_path) = get_api_cache_path()
+                && let Ok(metadata) = fs::metadata(&cache_path)
+                && let Ok(mtime) = metadata.modified()
+            {
+                let age = mtime
+                    .elapsed()
+                    .unwrap_or(Duration::from_secs(MAX_CACHE_AGE_SECS + 1));
+                if age > Duration::from_secs(MAX_CACHE_AGE_SECS) {
+                    return ApiUsageResult::StaleCache;
+                }
+            }
+            ApiUsageResult::Unavailable
         }
     }
 }
@@ -358,5 +404,28 @@ mod tests {
         // Only one thread should have acquired exclusive lock
         assert_eq!(*acquired_count.lock().unwrap(), 1);
         fs::remove_dir_all(&cache_dir).unwrap();
+    }
+
+    #[test]
+    fn test_api_usage_result_data() {
+        let data = ApiUsageData {
+            five_hour_percent: 25.0,
+            five_hour_resets_at: None,
+            seven_day_percent: 10.0,
+            seven_day_resets_at: None,
+            seven_day_sonnet_percent: 5.0,
+        };
+        let result = ApiUsageResult::Ok(data.clone());
+        assert!(result.data().is_some());
+        assert_eq!(result.data().unwrap().five_hour_percent, 25.0);
+        assert!(!result.is_stale());
+
+        let stale = ApiUsageResult::StaleCache;
+        assert!(stale.data().is_none());
+        assert!(stale.is_stale());
+
+        let unavailable = ApiUsageResult::Unavailable;
+        assert!(unavailable.data().is_none());
+        assert!(!unavailable.is_stale());
     }
 }

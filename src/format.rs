@@ -164,7 +164,11 @@ pub fn format_api_usage_5h(api_usage: &Option<ApiUsageData>) -> Option<String> {
     api_usage.as_ref().map(|api| {
         let five_hour_int = api.five_hour_percent as u32;
         let five_hour_block = decimal_to_block(api.five_hour_percent);
-        format!("5h:{}%{}", five_hour_int, five_hour_block)
+        if five_hour_block == ' ' {
+            format!("5h:{}%", five_hour_int)
+        } else {
+            format!("5h:{}%{}", five_hour_int, five_hour_block)
+        }
     })
 }
 
@@ -197,4 +201,70 @@ pub fn format_directory(path: &str) -> String {
     };
 
     formatted.green().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decimal_to_block_zero() {
+        assert_eq!(decimal_to_block(0.0), ' ');
+        assert_eq!(decimal_to_block(50.0), ' ');
+    }
+
+    #[test]
+    fn test_decimal_to_block_fractions() {
+        assert_eq!(decimal_to_block(0.1), '▁');
+        assert_eq!(decimal_to_block(0.5), '▅');
+        assert_eq!(decimal_to_block(0.9), '█');
+    }
+
+    #[test]
+    fn test_format_api_usage_5h_no_trailing_space() {
+        let data = ApiUsageData {
+            five_hour_percent: 37.0,
+            five_hour_resets_at: None,
+            seven_day_percent: 10.0,
+            seven_day_resets_at: None,
+            seven_day_sonnet_percent: 0.0,
+        };
+        let result = format_api_usage_5h(&Some(data)).unwrap();
+        assert_eq!(result, "5h:37%");
+        assert!(!result.ends_with(' '));
+    }
+
+    #[test]
+    fn test_format_api_usage_5h_with_block() {
+        let data = ApiUsageData {
+            five_hour_percent: 37.5,
+            five_hour_resets_at: None,
+            seven_day_percent: 10.0,
+            seven_day_resets_at: None,
+            seven_day_sonnet_percent: 0.0,
+        };
+        let result = format_api_usage_5h(&Some(data)).unwrap();
+        assert_eq!(result, "5h:37%▅");
+    }
+
+    #[test]
+    fn test_format_currency() {
+        assert_eq!(format_currency(12.345), "$12.35");
+        assert_eq!(format_currency(0.0), "$0.00");
+    }
+
+    #[test]
+    fn test_format_burn_rate() {
+        let low_burn = BurnRate {
+            cost_per_hour: 1.5,
+            tokens_per_minute: 1000,
+        };
+        assert!(format_burn_rate(&low_burn).contains("$1.50/h"));
+
+        let high_burn = BurnRate {
+            cost_per_hour: 10.0,
+            tokens_per_minute: 6000,
+        };
+        assert!(format_burn_rate(&high_burn).contains("$10.00/h"));
+    }
 }

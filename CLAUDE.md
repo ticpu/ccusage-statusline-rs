@@ -15,11 +15,8 @@ cargo build --release
 sudo cp target/release/ccusage-statusline-rs /usr/local/bin/
 ccusage-statusline-rs install
 
-# Test CLI commands
-ccusage-statusline-rs --help
-ccusage-statusline-rs --version
-ccusage-statusline-rs install    # Configure statusLine in ~/.claude/settings.json
-ccusage-statusline-rs uninstall  # Remove statusLine configuration
+# CLI subcommands: install, uninstall, test, config (see --help)
+ccusage-statusline-rs test       # Quick test with most recent transcript
 
 # Test with real data (piped mode)
 echo '{"session_id":"test","transcript_path":"path/to/session.jsonl","model":{"id":"claude-sonnet-4-20250514","display_name":"Claude 3.5 Sonnet"},"workspace":{"current_dir":"/home/user/project"}}' | ./target/release/ccusage-statusline-rs
@@ -35,15 +32,15 @@ make package
 
 ```
 src/
-├── main.rs       - Entry point: CLI args (install/uninstall), piped/interactive mode
-├── types.rs      - All structs (HookData, Workspace, Block, BurnRate, ApiUsageData, etc.)
-├── install.rs    - Install/uninstall commands for ~/.claude/settings.json
-├── pricing.rs    - LiteLLM pricing fetch from GitHub (24h cache)
-├── blocks.rs     - 5-hour billing block logic (dedup by messageId:requestId)
-├── cache.rs      - Semaphore-based output caching (XDG_RUNTIME_DIR, 30s TTL)
-├── format.rs     - Output formatting (emojis, colors, directory formatting)
-├── firefox.rs    - Firefox cookie extraction (immutable=1 SQLite, userID matching)
-└── api_usage.rs  - Claude.ai live API client (30s cache, graceful fallback)
+├── main.rs - Entry point: CLI args, piped/interactive mode
+├── types.rs - All structs (HookData, Block, BurnRate, ApiUsageData, etc.)
+├── install.rs - Install/uninstall commands for ~/.claude/settings.json
+├── pricing.rs - LiteLLM pricing fetch from GitHub (24h cache)
+├── blocks.rs - 5-hour billing block logic (dedup by messageId:requestId)
+├── cache.rs - Semaphore-based output caching (XDG_RUNTIME_DIR, 30s TTL)
+├── format.rs - Output formatting (emojis, colors, directory formatting)
+├── claude_binary.rs - Claude Code binary detection and User-Agent extraction
+└── api_usage.rs - Anthropic API client (OAuth from ~/.claude/.credentials.json)
 ```
 
 **Data Flow**:
@@ -59,19 +56,9 @@ src/
 
 ## Key Implementation Details
 
-**Firefox Cookie Extraction**:
-- Uses `file:///path/to/cookies.sqlite?immutable=1` to read locked DB
-- Matches `~/.claude/claude.json` userID to Firefox profile (searches cookies for ajs_user_id match)
-- Falls back to most recently modified profile
-- Extracts: `sessionKey`, `lastActiveOrg` only (minimal cookies needed)
-
-**Claude.ai API Integration**:
-- Endpoint: `https://claude.ai/api/organizations/{org}/usage`
-- Implementation: Uses libcurl via `curl` crate (Cloudflare blocks reqwest/rustls TLS fingerprint)
-- Headers: User-Agent (extracted from Firefox binary version), Cookie (sessionKey + lastActiveOrg)
-- Response: `{five_hour: {utilization: 5, resets_at: "..."}, seven_day: {utilization: 25, ...}}`
-- Caching: 30s in-memory (Mutex<Option<CachedResponse>>)
-- Errors: All API failures silent (stderr only), graceful fallback to local data
+**API Usage** (`api_usage.rs`):
+- OAuth token from `~/.claude/.credentials.json`
+- Cache: 30s fresh, 5min max stale (returns `ApiUsageResult::StaleCache` after)
 
 **5-Hour Billing Blocks**:
 - Floors timestamps to hour boundary
@@ -130,57 +117,11 @@ Both `PKGBUILD` and `Makefile` auto-extract version: `grep -Po '^version = "\K[^
 
 ## Testing
 
-**Unit tests**: `cargo test`
-
-**Integration testing**:
 ```bash
-# Test install/uninstall commands
-cargo run -- install     # Should configure ~/.claude/settings.json
-cargo run -- uninstall   # Should remove statusLine configuration
-cargo run -- --help      # Should show help
-cargo run -- --version   # Should show version
-
-# With real transcript (piped mode)
-TRANSCRIPT=$(find ~/.claude/projects -name "*.jsonl" | head -1)
-echo "{\"session_id\":\"test\",\"transcript_path\":\"$TRANSCRIPT\",\"model\":{\"id\":\"claude-sonnet-4-20250514\",\"display_name\":\"Claude 3.5 Sonnet\"},\"workspace\":{\"current_dir\":\"$PWD\"}}" | cargo run
-
-# Interactive mode (requires ~/.claude/projects with data)
-cargo run
-
-# API integration (requires Firefox logged into claude.ai)
-# Should show: 📊 5h:X% 7d:X% at end of output
-# Falls back silently to local data if API unavailable
+cargo test --release --message-format=short
 ```
-
-**Testing checklist**:
-- Install/uninstall commands work correctly
-- Directory formatting (home → ~, green color) works
-- Context (🧠) updates with new messages
-- Block cost (💰) matches billing cycles
-- Burn rate (🔥) calculated correctly
-- Performance <20ms average
-- API metrics shown when Firefox logged in
-- Fallback works when API unavailable
-
-## Dependencies
-
-- `clap` (derive) - CLI argument parsing for install/uninstall commands
-- `reqwest` (rustls-tls) - HTTP for LiteLLM pricing fetch
-- `curl` - libcurl bindings for claude.ai API (bypasses Cloudflare)
-- `rusqlite` (bundled) - Firefox cookie extraction
-- `chrono` - 5-hour block timestamps
-- `serde`/`serde_json` - JSONL parsing
-- `owo-colors` - Terminal colors
-- `anyhow` - Error handling
-- `fs2` - File locking for cache
-- `libc` - UID lookup for XDG_RUNTIME_DIR
-- `num-format` - Locale-based number formatting
 
 ## Gotchas
 
-- **Do NOT use `_var_name` to hide unused variables** (violates CLAUDE.md in parent)
 - Version is ONLY in Cargo.toml, never edit PKGBUILD/Makefile versions
-- CI checks formatting - must run `cargo fmt` before commit
 - DO NOT push tags until CI passes on master
-- API fallback is intentionally silent (only stderr for debugging)
-- Firefox cookies.sqlite must use `immutable=1` mode (locked by Firefox)
