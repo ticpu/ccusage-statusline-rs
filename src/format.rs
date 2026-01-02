@@ -119,7 +119,7 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-/// Format burn rate with emoji indicator
+/// Format burn rate with color indicator
 pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
     if burn_rate.is_at_limit {
         if let Some(reset) = burn_rate.reset_in {
@@ -132,22 +132,24 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
         return "✓".to_string();
     }
 
-    let warn = if burn_rate.ratio >= 1.0 {
-        "🚨"
-    } else {
-        ""
-    };
-
     let limit = match burn_rate.critical_limit {
         LimitType::FiveHour => " 5h",
         LimitType::SevenDay => " 7d",
         LimitType::None => "",
     };
 
-    match plan_type {
-        PlanType::Api => format!("{}/h{} {}", format_currency(burn_rate.cost_per_hour), limit, warn).trim().to_string(),
-        PlanType::Subscription => format!("{:.1}x{} {}", burn_rate.ratio, limit, warn).trim().to_string(),
-    }
+    let rate_str = match plan_type {
+        PlanType::Api => format!("{}/h", format_currency(burn_rate.cost_per_hour)),
+        PlanType::Subscription => format!("{:.1}x", burn_rate.ratio),
+    };
+
+    let colored_rate = if burn_rate.ratio >= 1.0 {
+        rate_str.red().to_string()
+    } else {
+        rate_str.yellow().to_string()
+    };
+
+    format!("{}{}", colored_rate, limit)
 }
 
 /// Format context information
@@ -317,6 +319,6 @@ mod tests {
             reset_in: None,
         };
         assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("1.4x"));
-        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("🚨"));
+        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("5h"));
     }
 }
