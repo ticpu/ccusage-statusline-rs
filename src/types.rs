@@ -174,6 +174,7 @@ pub enum PlanType {
 pub struct BurnRate {
     pub cost_per_hour: f64,
     pub ratio: f64,
+    pub seven_day_ratio: f64,
     pub critical_limit: LimitType,
     pub is_at_limit: bool,
     pub reset_in: Option<chrono::Duration>,

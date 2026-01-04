@@ -128,15 +128,9 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
         return "🔥limit".to_string();
     }
 
-    let limit = match burn_rate.critical_limit {
-        LimitType::FiveHour => " 5h",
-        LimitType::SevenDay => " 7d",
-        LimitType::None => "",
-    };
-
     let rate_str = match plan_type {
         PlanType::Api => format!("{}/h", format_currency(burn_rate.cost_per_hour)),
-        PlanType::Subscription => format!("{:.1}x", burn_rate.ratio),
+        PlanType::Subscription => format!("{}%", (burn_rate.ratio * 100.0).round() as i32),
     };
 
     let colored_rate = if burn_rate.ratio >= 1.0 {
@@ -147,7 +141,25 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
         rate_str.green().to_string()
     };
 
-    format!("🔥\u{200B}{}{}", colored_rate, limit)
+    let limit_str = match burn_rate.critical_limit {
+        LimitType::FiveHour => " 5h",
+        LimitType::SevenDay => " 7d",
+        LimitType::None => "",
+    };
+
+    // Always show 7d when it's >= 100% (1.0x) and we're not already showing it
+    let seven_day_suffix =
+        if burn_rate.seven_day_ratio >= 1.0 && burn_rate.critical_limit != LimitType::SevenDay {
+            let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
+            format!(" {}7d", pct.to_string().red())
+        } else {
+            String::new()
+        };
+
+    format!(
+        "🔥\u{200B}{}{}{}",
+        colored_rate, limit_str, seven_day_suffix
+    )
 }
 
 /// Format context information
@@ -293,16 +305,18 @@ mod tests {
         let safe_burn = BurnRate {
             cost_per_hour: 1.5,
             ratio: 0.5,
+            seven_day_ratio: 0.0,
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
         };
         assert!(format_burn_rate(&safe_burn, PlanType::Api).contains("$1.50/h"));
-        assert!(format_burn_rate(&safe_burn, PlanType::Subscription).contains("0.5x"));
+        assert!(format_burn_rate(&safe_burn, PlanType::Subscription).contains("50%"));
 
         let warning_burn = BurnRate {
             cost_per_hour: 10.0,
             ratio: 0.9,
+            seven_day_ratio: 0.0,
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
@@ -313,11 +327,45 @@ mod tests {
         let danger_burn = BurnRate {
             cost_per_hour: 15.0,
             ratio: 1.4,
+            seven_day_ratio: 0.0,
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
         };
-        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("1.4x"));
+        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("140%"));
         assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("5h"));
+    }
+
+    #[test]
+    fn test_format_burn_rate_with_critical_7d() {
+        // When 7d >= 100% and showing 5h, should also show 7d
+        let burn_with_7d = BurnRate {
+            cost_per_hour: 5.0,
+            ratio: 0.5,
+            seven_day_ratio: 1.1,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: None,
+        };
+        let result = format_burn_rate(&burn_with_7d, PlanType::Subscription);
+        assert!(result.contains("50%"));
+        assert!(result.contains("5h"));
+        assert!(result.contains("110"));
+        assert!(result.contains("7d"));
+
+        // When 7d is already the critical limit, don't duplicate
+        let burn_7d_critical = BurnRate {
+            cost_per_hour: 5.0,
+            ratio: 1.1,
+            seven_day_ratio: 1.1,
+            critical_limit: LimitType::SevenDay,
+            is_at_limit: false,
+            reset_in: None,
+        };
+        let result = format_burn_rate(&burn_7d_critical, PlanType::Subscription);
+        assert!(result.contains("110%"));
+        assert!(result.contains(" 7d"));
+        // Should only have one "7d"
+        assert_eq!(result.matches("7d").count(), 1);
     }
 }

@@ -388,6 +388,7 @@ fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -
         return Ok(BurnRate {
             cost_per_hour: 0.0,
             ratio: 0.0,
+            seven_day_ratio: 0.0,
             critical_limit: LimitType::None,
             is_at_limit: false,
             reset_in: None,
@@ -401,6 +402,7 @@ fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -
         return Ok(BurnRate {
             cost_per_hour: 0.0,
             ratio: 0.0,
+            seven_day_ratio: 0.0,
             critical_limit: LimitType::None,
             is_at_limit: false,
             reset_in: None,
@@ -416,6 +418,7 @@ fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -
             return Ok(BurnRate {
                 cost_per_hour,
                 ratio: 0.0,
+                seven_day_ratio: 0.0,
                 critical_limit: LimitType::None,
                 is_at_limit: false,
                 reset_in: None,
@@ -472,6 +475,7 @@ fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -
     Ok(BurnRate {
         cost_per_hour,
         ratio,
+        seven_day_ratio: seven_day_ratio.0,
         critical_limit,
         is_at_limit,
         reset_in,
