@@ -426,41 +426,42 @@ fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -
         }
     };
 
-    // Calculate ratios for both limits
+    // Calculate ratios for both limits using API time windows
     let five_hour_ratio = calculate_limit_ratio(
         api_usage.five_hour_percent,
         api_usage.five_hour_resets_at,
-        cost_per_hour,
-        block.cost_usd,
+        5.0,
     );
 
-    // For 7-day, we can't estimate cap from 5h block cost - use percentage directly
-    // 80% usage = 0.8 ratio (warning), 100% = 1.0 ratio (at limit)
-    let seven_day_ratio = (api_usage.seven_day_percent / 100.0, 0.0);
+    let seven_day_ratio = calculate_limit_ratio(
+        api_usage.seven_day_percent,
+        api_usage.seven_day_resets_at,
+        168.0, // 7 days in hours
+    );
 
     // Determine critical limit (prioritize 5h over 7d)
-    let (critical_limit, ratio, reset_at) = if five_hour_ratio.0 >= 0.8 {
+    let (critical_limit, ratio, reset_at) = if five_hour_ratio >= 0.8 {
         (
             LimitType::FiveHour,
-            five_hour_ratio.0,
+            five_hour_ratio,
             api_usage.five_hour_resets_at,
         )
-    } else if seven_day_ratio.0 >= 0.8 {
+    } else if seven_day_ratio >= 0.8 {
         (
             LimitType::SevenDay,
-            seven_day_ratio.0,
+            seven_day_ratio,
             api_usage.seven_day_resets_at,
         )
-    } else if five_hour_ratio.0 > 0.0 {
+    } else if five_hour_ratio > 0.0 {
         (
             LimitType::FiveHour,
-            five_hour_ratio.0,
+            five_hour_ratio,
             api_usage.five_hour_resets_at,
         )
-    } else if seven_day_ratio.0 > 0.0 {
+    } else if seven_day_ratio > 0.0 {
         (
             LimitType::SevenDay,
-            seven_day_ratio.0,
+            seven_day_ratio,
             api_usage.seven_day_resets_at,
         )
     } else {
@@ -475,53 +476,53 @@ fn calculate_burn_rate(block: &types::Block, api_usage: Option<&ApiUsageData>) -
     Ok(BurnRate {
         cost_per_hour,
         ratio,
-        seven_day_ratio: seven_day_ratio.0,
+        seven_day_ratio,
         critical_limit,
         is_at_limit,
         reset_in,
     })
 }
 
-/// Calculate ratio for a single limit
+/// Calculate ratio for a single limit using API data
 fn calculate_limit_ratio(
     current_percent: f64,
     resets_at: Option<DateTime<Utc>>,
-    cost_per_hour: f64,
-    block_cost: f64,
-) -> (f64, f64) {
+    block_duration_hours: f64,
+) -> f64 {
     if current_percent <= 0.0 || current_percent >= 100.0 {
-        return (0.0, 0.0);
+        return 0.0;
     }
 
     let reset_time = match resets_at {
         Some(t) => t,
-        None => return (0.0, 0.0),
+        None => return 0.0,
     };
 
     let now = Utc::now();
     let hours_until_reset = (reset_time - now).num_seconds() as f64 / 3600.0;
 
     if hours_until_reset <= 0.0 {
-        return (0.0, 0.0);
+        return 0.0;
     }
 
-    // Estimate cap from current usage
-    let estimated_cap = if current_percent > 0.0 {
-        block_cost / (current_percent / 100.0)
-    } else {
-        return (0.0, 0.0);
-    };
+    // Use API's time window, not local block start
+    let api_elapsed_hours = block_duration_hours - hours_until_reset;
+    if api_elapsed_hours <= 0.0 {
+        return 0.0;
+    }
 
-    let remaining_capacity = estimated_cap * (1.0 - current_percent / 100.0);
-    let safe_rate = remaining_capacity / hours_until_reset;
+    // Current burn rate: % of limit used per hour
+    let current_rate = current_percent / api_elapsed_hours;
 
-    let ratio = if safe_rate > 0.0 {
-        cost_per_hour / safe_rate
+    // Safe rate: % per hour that would exactly exhaust remaining capacity by reset
+    let remaining_percent = 100.0 - current_percent;
+    let safe_rate = remaining_percent / hours_until_reset;
+
+    if safe_rate > 0.0 {
+        current_rate / safe_rate
     } else {
         0.0
-    };
-
-    (ratio, safe_rate)
+    }
 }
 
 /// Calculate context tokens from transcript
