@@ -151,7 +151,7 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
     let seven_day_suffix =
         if burn_rate.seven_day_ratio >= 1.0 && burn_rate.critical_limit != LimitType::SevenDay {
             let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
-            format!(" {}7d", pct.to_string().red())
+            format!(" {} 7d", format!("{}%", pct).red())
         } else {
             String::new()
         };
@@ -350,7 +350,7 @@ mod tests {
         let result = format_burn_rate(&burn_with_7d, PlanType::Subscription);
         assert!(result.contains("50%"));
         assert!(result.contains("5h"));
-        assert!(result.contains("110"));
+        assert!(result.contains("110%"));
         assert!(result.contains("7d"));
 
         // When 7d is already the critical limit, don't duplicate
@@ -367,5 +367,52 @@ mod tests {
         assert!(result.contains(" 7d"));
         // Should only have one "7d"
         assert_eq!(result.matches("7d").count(), 1);
+    }
+
+    #[test]
+    fn test_format_burn_rate_both_over_100_percent() {
+        let burn = BurnRate {
+            cost_per_hour: 15.0,
+            ratio: 1.4,
+            seven_day_ratio: 1.1,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: None,
+        };
+        let result = format_burn_rate(&burn, PlanType::Subscription);
+        // Both percentages must include the % sign
+        assert_eq!(result.matches('%').count(), 2);
+        // 7d suffix must have space before "7d"
+        assert!(result.contains(" 7d"));
+        // Should not have "1107d" run together (ignoring ANSI codes)
+        let stripped = strip_ansi_codes(&result);
+        assert!(
+            stripped.contains("110% 7d"),
+            "expected '110% 7d' in '{}'",
+            stripped
+        );
+        assert!(
+            stripped.contains("140% 5h"),
+            "expected '140% 5h' in '{}'",
+            stripped
+        );
+    }
+
+    fn strip_ansi_codes(s: &str) -> String {
+        let mut result = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
     }
 }
