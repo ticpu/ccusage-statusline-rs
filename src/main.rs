@@ -151,7 +151,12 @@ fn run_interactive_mode() -> Result<()> {
         }
     }
 
-    println!("{}", parts.join(" │ "));
+    let output = parts.join(" │ ");
+    if statusline_config.show_emojis {
+        println!("{}", output);
+    } else {
+        println!("{}", strip_emojis(&output));
+    }
 
     Ok(())
 }
@@ -329,7 +334,12 @@ fn generate_statusline(
         }
     }
 
-    Ok(parts.join(" │ "))
+    let output = parts.join(" │ ");
+    if statusline_config.show_emojis {
+        Ok(output)
+    } else {
+        Ok(strip_emojis(&output))
+    }
 }
 
 #[cfg(test)]

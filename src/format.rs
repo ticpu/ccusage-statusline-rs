@@ -358,6 +358,15 @@ pub fn format_api_usage_sonnet(api_usage: Option<&ApiUsageData>) -> Option<Strin
     api_usage.map(|api| format!("S7d:{}%", api.seven_day_sonnet_percent as u32))
 }
 
+pub fn strip_emojis(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            let cp = *c as u32;
+            !(0x1F300..=0x1FAFF).contains(&cp) && cp != 0x200B
+        })
+        .collect()
+}
+
 /// Format directory path with home replacement and color
 pub fn format_directory(path: &str) -> String {
     use std::env;
@@ -853,6 +862,14 @@ mod tests {
         assert_eq!(format_eta(Duration::hours(2)), "2h");
         assert_eq!(format_eta(Duration::hours(14)), "14h");
         assert_eq!(format_eta(Duration::hours(23)), "23h");
+    }
+
+    #[test]
+    fn test_strip_emojis() {
+        assert_eq!(strip_emojis("🤖Claude"), "Claude");
+        assert_eq!(strip_emojis("📊5h:37%▅"), "5h:37%▅");
+        assert_eq!(strip_emojis("🔥\u{200B}50% 5h"), "50% 5h");
+        assert_eq!(strip_emojis("no emojis here"), "no emojis here");
     }
 
     fn default_thresholds() -> Thresholds {

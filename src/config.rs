@@ -185,6 +185,10 @@ impl Default for CacheSettings {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatuslineConfig {
     pub enabled_elements: Vec<StatusElement>,
@@ -192,6 +196,8 @@ pub struct StatuslineConfig {
     pub thresholds: Thresholds,
     #[serde(default)]
     pub cache: CacheSettings,
+    #[serde(default = "default_true")]
+    pub show_emojis: bool,
 }
 
 impl Default for StatuslineConfig {
@@ -210,6 +216,7 @@ impl Default for StatuslineConfig {
             ],
             thresholds: Thresholds::default(),
             cache: CacheSettings::default(),
+            show_emojis: true,
         }
     }
 }
@@ -334,9 +341,10 @@ pub fn run_config_menu() -> Result<()> {
             MainMenu::SaveAndExit => {
                 config.save()?;
                 println!(
-                    "Configuration saved to {}",
+                    "\nConfiguration saved to {}",
                     StatuslineConfig::config_path()?.display()
                 );
+                println!("  Emojis: {}", if config.show_emojis { "on" } else { "off" });
                 break;
             }
         }
@@ -347,41 +355,35 @@ pub fn run_config_menu() -> Result<()> {
 
 fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
     let all_elements = StatusElement::all();
-    let options: Vec<String> = all_elements
+    let emojis_label = "😀 Emojis";
+    let mut options: Vec<String> = all_elements
         .iter()
-        .map(|e| {
-            e.label()
-                .to_string()
-        })
+        .map(|e| e.label().to_string())
         .collect();
+    options.push(emojis_label.to_string());
 
-    let default_indices: Vec<usize> = all_elements
+    let mut default_indices: Vec<usize> = all_elements
         .iter()
         .enumerate()
-        .filter(|(_, elem)| {
-            config
-                .enabled_elements
-                .contains(elem)
-        })
+        .filter(|(_, elem)| config.enabled_elements.contains(elem))
         .map(|(i, _)| i)
         .collect();
+    if config.show_emojis {
+        default_indices.push(options.len() - 1);
+    }
 
     let Some(selected) = MultiSelect::new("Select elements to display:", options)
         .with_default(&default_indices)
-        .with_page_size(15)
+        .with_page_size(16)
         .prompt_skippable()?
     else {
         return Ok(());
     };
 
+    config.show_emojis = selected.iter().any(|label| label == emojis_label);
     config.enabled_elements = selected
         .iter()
-        .filter_map(|label| {
-            all_elements
-                .iter()
-                .find(|e| e.label() == label)
-                .cloned()
-        })
+        .filter_map(|label| all_elements.iter().find(|e| e.label() == label).cloned())
         .collect();
 
     Ok(())
