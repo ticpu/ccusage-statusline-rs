@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::cache::get_cache_dir;
-use crate::types::ApiUsageData;
+use crate::paths::home_dir;
+use crate::types::{ApiUsageData, PlanType};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UsageLimit {
@@ -76,46 +77,31 @@ fn get_api_cache_path() -> Result<PathBuf> {
     Ok(cache_dir.join("api-usage-cache.json"))
 }
 
-/// Read OAuth credentials from Claude Code's credentials file
+fn read_credentials() -> Result<ClaudeCredentials> {
+    let home = home_dir()?;
+    let creds_path = home.join(".claude/.credentials.json");
+
+    let content = fs::read_to_string(&creds_path)
+        .context("Failed to read credentials - ensure you're logged in with Claude Code")?;
+
+    serde_json::from_str(&content).context("Failed to parse credentials file")
+}
+
 fn read_oauth_credentials() -> Result<String> {
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let creds_path = PathBuf::from(&home).join(".claude/.credentials.json");
-
-    let content = fs::read_to_string(&creds_path).context(
-        "Failed to read ~/.claude/.credentials.json - ensure you're logged in with Claude Code",
-    )?;
-
-    let creds: ClaudeCredentials =
-        serde_json::from_str(&content).context("Failed to parse credentials file")?;
-
+    let creds = read_credentials()?;
     creds
         .claude_ai_oauth
         .map(|oauth| oauth.access_token)
         .context("No OAuth credentials found - run 'claude' to login")
 }
 
-/// Get plan type from Claude credentials
-pub fn get_plan_type() -> crate::types::PlanType {
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return crate::types::PlanType::Api,
-    };
-
-    let creds_path = PathBuf::from(&home).join(".claude/.credentials.json");
-
-    let content = match fs::read_to_string(&creds_path) {
-        Ok(c) => c,
-        Err(_) => return crate::types::PlanType::Api,
-    };
-
-    let creds: ClaudeCredentials = match serde_json::from_str(&content) {
-        Ok(c) => c,
-        Err(_) => return crate::types::PlanType::Api,
-    };
-
-    match creds.claude_ai_oauth {
-        Some(oauth) if oauth.subscription_type.is_some() => crate::types::PlanType::Subscription,
-        _ => crate::types::PlanType::Api,
+pub fn get_plan_type() -> PlanType {
+    match read_credentials() {
+        Ok(creds) => match creds.claude_ai_oauth {
+            Some(oauth) if oauth.subscription_type.is_some() => PlanType::Subscription,
+            _ => PlanType::Api,
+        },
+        Err(_) => PlanType::Api,
     }
 }
 

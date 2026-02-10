@@ -1,13 +1,12 @@
+use crate::paths::home_dir;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-/// Get the path to Claude settings file
 fn get_settings_path() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME environment variable not set")?;
-    Ok(PathBuf::from(home).join(".claude").join("settings.json"))
+    Ok(home_dir()?.join(".claude/settings.json"))
 }
 
 /// Prompt user for yes/no confirmation

@@ -3,6 +3,11 @@
 
 set -e
 
+if git diff --cached --diff-filter=AM --name-only | grep '\.rs$' | xargs grep -nH '#\[.*allow(dead_code).*\]' 2>/dev/null; then
+    echo "❌ Found #[allow(dead_code)] in staged files. Refactor the code without it or ask the user for explicit approval."
+    exit 1
+fi
+
 if ! cargo fmt -- --check 2>/dev/null; then
     echo "❌ Code is not formatted. Run 'cargo fmt' to fix."
     exit 1

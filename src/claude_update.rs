@@ -1,10 +1,11 @@
+use crate::cache::get_cache_dir;
+use crate::claude_binary;
 use crate::config::{StatusElement, StatuslineConfig};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 const NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";
@@ -38,19 +39,14 @@ struct UpdateCache {
 }
 
 fn get_cache_path(channel: VersionChannel) -> Result<PathBuf> {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .or_else(|_| -> Result<String, std::env::VarError> {
-            let uid = unsafe { libc::getuid() };
-            Ok(format!("/run/user/{}", uid))
-        })
-        .context("Failed to determine XDG_RUNTIME_DIR")?;
+    let cache_dir = get_cache_dir()?;
 
     let filename = match channel {
-        VersionChannel::Stable => "ccusage-update-stable.json",
-        VersionChannel::Latest => "ccusage-update-latest.json",
+        VersionChannel::Stable => "update-stable.json",
+        VersionChannel::Latest => "update-latest.json",
     };
 
-    Ok(PathBuf::from(runtime_dir).join(filename))
+    Ok(cache_dir.join(filename))
 }
 
 fn read_cache(channel: VersionChannel) -> Option<UpdateCache> {
@@ -112,17 +108,6 @@ fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
     }
 }
 
-fn get_installed_claude_version() -> Option<String> {
-    let output = Command::new("claude").arg("--version").output().ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let version_output = String::from_utf8(output.stdout).ok()?;
-    version_output.split_whitespace().next().map(String::from)
-}
-
 fn compare_versions(current: &str, latest: &str) -> bool {
     use semver::Version;
 
@@ -161,7 +146,7 @@ fn get_version_channel() -> Option<VersionChannel> {
 /// Caches results for 30 minutes per channel.
 pub fn check_update_available() -> Option<String> {
     let channel = get_version_channel()?;
-    let current = get_installed_claude_version()?;
+    let current = claude_binary::get_version()?;
 
     // Try to read cache first
     if let Some(cache) = read_cache(channel)

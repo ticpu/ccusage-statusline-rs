@@ -1,4 +1,4 @@
-use crate::types::{ModelPricing, PricingCache, UsageData};
+use crate::types::{ModelPricing, PricingCache, TokenPrices, UsageData};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -113,75 +113,40 @@ fn estimate_cost_fallback(entry: &UsageData) -> f64 {
         .as_deref()
         .unwrap_or("claude-sonnet-4-20250514");
 
-    // LiteLLM pricing (per token, not per million)
-    let (
-        input_price,
-        output_price,
-        cache_write_price,
-        cache_read_price,
-        input_price_above_200k,
-        output_price_above_200k,
-        cache_write_price_above_200k,
-        cache_read_price_above_200k,
-    ) = match model {
-        "claude-sonnet-4-20250514" => (
-            3e-6,    // input
-            15e-6,   // output
-            3.75e-6, // cache_creation
-            3e-7,    // cache_read
-            6e-6,    // input_above_200k
-            22.5e-6, // output_above_200k
-            7.5e-6,  // cache_creation_above_200k
-            6e-7,    // cache_read_above_200k
-        ),
-        "claude-sonnet-4-5-20250929" => (
-            3e-6,    // input (no tiered pricing)
-            15e-6,   // output
-            3.75e-6, // cache_creation
-            3e-7,    // cache_read
-            3e-6,    // same as base (no tiered pricing)
-            15e-6, 3.75e-6, 3e-7,
-        ),
-        "claude-opus-4-1-20250805" => (
-            15e-6,    // input (5x more expensive)
-            75e-6,    // output
-            18.75e-6, // cache_creation
-            1.5e-6,   // cache_read (5x more expensive)
-            15e-6,    // no tiered pricing
-            75e-6, 18.75e-6, 1.5e-6,
-        ),
-        _ => (3e-6, 15e-6, 3.75e-6, 3e-7, 6e-6, 22.5e-6, 7.5e-6, 6e-7), // default to Sonnet 4
+    let pricing = if model.starts_with("claude-opus") {
+        // Opus family: $15/M input, $75/M output, no tiered pricing
+        let prices = TokenPrices {
+            input: 15e-6,
+            output: 75e-6,
+            cache_write: 18.75e-6,
+            cache_read: 1.5e-6,
+        };
+        ModelPricing::from_prices(prices, prices)
+    } else if model.starts_with("claude-sonnet-4-5") {
+        // Sonnet 4.5: same base as Sonnet 4, no tiered pricing
+        let prices = TokenPrices {
+            input: 3e-6,
+            output: 15e-6,
+            cache_write: 3.75e-6,
+            cache_read: 3e-7,
+        };
+        ModelPricing::from_prices(prices, prices)
+    } else {
+        // Default: Sonnet 4 with tiered pricing above 200k
+        let base = TokenPrices {
+            input: 3e-6,
+            output: 15e-6,
+            cache_write: 3.75e-6,
+            cache_read: 3e-7,
+        };
+        let tiered = TokenPrices {
+            input: 6e-6,
+            output: 22.5e-6,
+            cache_write: 7.5e-6,
+            cache_read: 6e-7,
+        };
+        ModelPricing::from_prices(base, tiered)
     };
 
-    // Helper for tiered cost calculation (200k threshold for Claude models)
-    let calc_tiered = |tokens: u64, base_price: f64, tiered_price: f64| -> f64 {
-        if tokens <= 200_000 {
-            tokens as f64 * base_price
-        } else {
-            (200_000.0 * base_price) + ((tokens - 200_000) as f64 * tiered_price)
-        }
-    };
-
-    let input_cost = calc_tiered(
-        entry.message.usage.input_tokens,
-        input_price,
-        input_price_above_200k,
-    );
-    let output_cost = calc_tiered(
-        entry.message.usage.output_tokens,
-        output_price,
-        output_price_above_200k,
-    );
-    let cache_write_cost = calc_tiered(
-        entry.message.usage.cache_creation_input_tokens,
-        cache_write_price,
-        cache_write_price_above_200k,
-    );
-    let cache_read_cost = calc_tiered(
-        entry.message.usage.cache_read_input_tokens,
-        cache_read_price,
-        cache_read_price_above_200k,
-    );
-
-    input_cost + output_cost + cache_write_cost + cache_read_cost
+    pricing.calculate_cost(&entry.message.usage)
 }

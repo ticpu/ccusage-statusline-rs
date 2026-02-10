@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::paths::home_dir;
+use anyhow::Result;
 use inquire::MultiSelect;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -82,8 +83,7 @@ impl Default for StatuslineConfig {
 
 impl StatuslineConfig {
     fn config_path() -> Result<PathBuf> {
-        let home = std::env::var("HOME").context("HOME not set")?;
-        Ok(PathBuf::from(home).join(".claude/ccusage-statusline-config.json"))
+        Ok(home_dir()?.join(".claude/ccusage-statusline-config.json"))
     }
 
     pub fn load() -> Result<Self> {

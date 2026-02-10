@@ -14,25 +14,17 @@ pub fn format_block_info(block: &Block) -> String {
 
 /// Pick clock emoji based on hours remaining
 fn get_clock_emoji(remaining_hours: f64) -> &'static str {
-    let remaining_minutes = remaining_hours * 60.0;
+    const CLOCKS: [&str; 6] = ["🕛", "🕐", "🕑", "🕒", "🕓", "🕔"];
 
-    if remaining_minutes < 15.0 {
-        "🕛" // 12 o'clock
-    } else if remaining_hours <= 1.0 {
-        "🕐" // 1 o'clock
-    } else if remaining_hours <= 2.0 {
-        "🕑" // 2 o'clock
-    } else if remaining_hours <= 3.0 {
-        "🕒" // 3 o'clock
-    } else if remaining_hours <= 4.0 {
-        "🕓" // 4 o'clock
-    } else {
-        "🕔" // 5 o'clock
+    if remaining_hours * 60.0 < 15.0 {
+        return CLOCKS[0];
     }
+    let idx = (remaining_hours.ceil() as usize).clamp(1, 5);
+    CLOCKS[idx]
 }
 
 /// Format 5-hour time remaining
-pub fn format_time_remaining_5h(block: &Block, api_usage: &Option<ApiUsageData>) -> Option<String> {
+pub fn format_time_remaining_5h(block: &Block, api_usage: Option<&ApiUsageData>) -> Option<String> {
     if !block.is_active {
         return None;
     }
@@ -52,7 +44,7 @@ pub fn format_time_remaining_5h(block: &Block, api_usage: &Option<ApiUsageData>)
 }
 
 /// Format 7-day time remaining
-pub fn format_time_remaining_7d(api_usage: &Option<ApiUsageData>) -> Option<String> {
+pub fn format_time_remaining_7d(api_usage: Option<&ApiUsageData>) -> Option<String> {
     let now = Utc::now();
 
     if let Some(api) = api_usage
@@ -147,7 +139,6 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
         LimitType::None => "",
     };
 
-    // Always show 7d when it's >= 100% (1.0x) and we're not already showing it
     let seven_day_suffix =
         if burn_rate.seven_day_ratio >= 1.0 && burn_rate.critical_limit != LimitType::SevenDay {
             let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
@@ -163,7 +154,7 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
 }
 
 /// Format context information
-pub fn format_context(context: &Option<ContextInfo>) -> String {
+pub fn format_context(context: Option<&ContextInfo>) -> String {
     match context {
         Some(info) => {
             let color = if info.percentage < 50 {
@@ -192,23 +183,14 @@ pub fn format_currency(amount: f64) -> String {
 
 /// Map decimal portion (0.0-0.9) to Unicode block character (vertical fill)
 fn decimal_to_block(value: f64) -> char {
-    let decimal = value.fract();
-    match (decimal * 10.0) as u32 {
-        0 => ' ',
-        1 => '▁',
-        2 => '▂',
-        3 => '▃',
-        4 => '▄',
-        5 => '▅',
-        6 => '▆',
-        7 => '▇',
-        _ => '█',
-    }
+    const BLOCKS: [char; 10] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█', '█'];
+    let idx = ((value.fract() * 10.0) as usize).min(9);
+    BLOCKS[idx]
 }
 
 /// Format 5h API usage
-pub fn format_api_usage_5h(api_usage: &Option<ApiUsageData>) -> Option<String> {
-    api_usage.as_ref().map(|api| {
+pub fn format_api_usage_5h(api_usage: Option<&ApiUsageData>) -> Option<String> {
+    api_usage.map(|api| {
         let five_hour_int = api.five_hour_percent as u32;
         let five_hour_block = decimal_to_block(api.five_hour_percent);
         if five_hour_block == ' ' {
@@ -220,17 +202,13 @@ pub fn format_api_usage_5h(api_usage: &Option<ApiUsageData>) -> Option<String> {
 }
 
 /// Format 7d API usage
-pub fn format_api_usage_7d(api_usage: &Option<ApiUsageData>) -> Option<String> {
-    api_usage
-        .as_ref()
-        .map(|api| format!("7d:{}%", api.seven_day_percent as u32))
+pub fn format_api_usage_7d(api_usage: Option<&ApiUsageData>) -> Option<String> {
+    api_usage.map(|api| format!("7d:{}%", api.seven_day_percent as u32))
 }
 
 /// Format Sonnet 7d API usage
-pub fn format_api_usage_sonnet(api_usage: &Option<ApiUsageData>) -> Option<String> {
-    api_usage
-        .as_ref()
-        .map(|api| format!("S7d:{}%", api.seven_day_sonnet_percent as u32))
+pub fn format_api_usage_sonnet(api_usage: Option<&ApiUsageData>) -> Option<String> {
+    api_usage.map(|api| format!("S7d:{}%", api.seven_day_sonnet_percent as u32))
 }
 
 /// Format directory path with home replacement and color
@@ -276,7 +254,7 @@ mod tests {
             seven_day_resets_at: None,
             seven_day_sonnet_percent: 0.0,
         };
-        let result = format_api_usage_5h(&Some(data)).unwrap();
+        let result = format_api_usage_5h(Some(&data)).unwrap();
         assert_eq!(result, "5h:37%");
         assert!(!result.ends_with(' '));
     }
@@ -290,7 +268,7 @@ mod tests {
             seven_day_resets_at: None,
             seven_day_sonnet_percent: 0.0,
         };
-        let result = format_api_usage_5h(&Some(data)).unwrap();
+        let result = format_api_usage_5h(Some(&data)).unwrap();
         assert_eq!(result, "5h:37%▅");
     }
 
@@ -338,7 +316,6 @@ mod tests {
 
     #[test]
     fn test_format_burn_rate_with_critical_7d() {
-        // When 7d >= 100% and showing 5h, should also show 7d
         let burn_with_7d = BurnRate {
             cost_per_hour: 5.0,
             ratio: 0.5,
@@ -353,7 +330,6 @@ mod tests {
         assert!(result.contains("110%"));
         assert!(result.contains("7d"));
 
-        // When 7d is already the critical limit, don't duplicate
         let burn_7d_critical = BurnRate {
             cost_per_hour: 5.0,
             ratio: 1.1,
@@ -365,7 +341,6 @@ mod tests {
         let result = format_burn_rate(&burn_7d_critical, PlanType::Subscription);
         assert!(result.contains("110%"));
         assert!(result.contains(" 7d"));
-        // Should only have one "7d"
         assert_eq!(result.matches("7d").count(), 1);
     }
 
@@ -380,11 +355,8 @@ mod tests {
             reset_in: None,
         };
         let result = format_burn_rate(&burn, PlanType::Subscription);
-        // Both percentages must include the % sign
         assert_eq!(result.matches('%').count(), 2);
-        // 7d suffix must have space before "7d"
         assert!(result.contains(" 7d"));
-        // Should not have "1107d" run together (ignoring ANSI codes)
         let stripped = strip_ansi_codes(&result);
         assert!(
             stripped.contains("110% 7d"),

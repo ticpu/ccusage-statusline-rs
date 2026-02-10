@@ -1,3 +1,4 @@
+use crate::paths::iter_jsonl_files;
 use crate::pricing::PricingFetcher;
 use crate::types::{Block, UsageData};
 use anyhow::Result;
@@ -127,20 +128,15 @@ pub fn create_block_from_entries(
         None
     };
 
-    // Aggregate costs and tokens
     let mut cost_usd = 0.0;
-    let mut total_tokens = 0u64;
-
     for entry in entries {
         cost_usd += pricing.calculate_entry_cost(entry);
-        total_tokens += entry.message.usage.input_tokens + entry.message.usage.output_tokens;
     }
 
     Block {
         start_time,
         end_time,
         cost_usd,
-        total_tokens,
         is_active,
         hours_remaining,
     }
@@ -151,93 +147,61 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
     let mut all_entries = Vec::with_capacity(1000);
     let mut processed_hashes: HashSet<String> = HashSet::with_capacity(1000);
 
-    // Only process files modified within lookback window
     let now = Utc::now();
     let file_cutoff_time = now - Duration::hours(FILE_LOOKBACK_HOURS);
     let file_cutoff_timestamp = file_cutoff_time.timestamp();
 
-    // Collect all usage data from all projects
-    for base_path in claude_paths {
-        for project_entry in fs::read_dir(base_path)? {
-            let project_dir = project_entry?.path();
-            if !project_dir.is_dir() {
+    for session_file in iter_jsonl_files(claude_paths)? {
+        // Skip files not modified within lookback window
+        if let Ok(metadata) = fs::metadata(&session_file)
+            && let Ok(modified) = metadata.modified()
+            && let Ok(modified_duration) = modified.duration_since(std::time::UNIX_EPOCH)
+            && (modified_duration.as_secs() as i64) < file_cutoff_timestamp
+        {
+            continue;
+        }
+
+        let file = File::open(&session_file)?;
+        let reader = BufReader::with_capacity(BUFREADER_CAPACITY, file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
                 continue;
             }
+            if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
+                if let (Some(msg_id), Some(req_id)) = (&entry.message.id, &entry.request_id) {
+                    let mut hash = String::with_capacity(msg_id.len() + req_id.len() + 1);
+                    hash.push_str(msg_id);
+                    hash.push(':');
+                    hash.push_str(req_id);
 
-            for session_entry in fs::read_dir(&project_dir)? {
-                let session_file = session_entry?.path();
-                if session_file.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-                    continue;
-                }
-
-                // Skip files not modified within lookback window
-                if let Ok(metadata) = fs::metadata(&session_file)
-                    && let Ok(modified) = metadata.modified()
-                    && let Ok(modified_duration) = modified.duration_since(std::time::UNIX_EPOCH)
-                    && (modified_duration.as_secs() as i64) < file_cutoff_timestamp
-                {
-                    continue;
-                }
-
-                // Read JSONL file with larger buffer
-                let file = File::open(&session_file)?;
-                let reader = BufReader::with_capacity(BUFREADER_CAPACITY, file);
-
-                for line in reader.lines() {
-                    let line = line?;
-                    if line.trim().is_empty() {
+                    if !processed_hashes.insert(hash) {
                         continue;
                     }
-                    if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
-                        // Create unique hash from message_id and request_id (matching TypeScript logic)
-                        if let (Some(msg_id), Some(req_id)) = (&entry.message.id, &entry.request_id)
-                        {
-                            let mut hash = String::with_capacity(msg_id.len() + req_id.len() + 1);
-                            hash.push_str(msg_id);
-                            hash.push(':');
-                            hash.push_str(req_id);
-
-                            // Skip duplicates (matching TypeScript deduplication)
-                            if !processed_hashes.insert(hash) {
-                                continue; // Already exists, skip duplicate
-                            }
-                        }
-
-                        all_entries.push(entry);
-                    }
                 }
+
+                all_entries.push(entry);
             }
         }
     }
 
-    // Sort by timestamp
     all_entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
-    // Group into billing blocks
     let blocks = group_into_blocks(&all_entries, pricing)?;
 
-    // Find active block
     let now = Utc::now();
     for block in blocks.iter().rev() {
         if block.is_active && block.end_time > now {
-            return Ok(Block {
-                start_time: block.start_time,
-                end_time: block.end_time,
-                cost_usd: block.cost_usd,
-                total_tokens: block.total_tokens,
-                is_active: true,
-                hours_remaining: block.hours_remaining,
-            });
+            return Ok(block.clone());
         }
     }
 
-    // No active block found, return empty
     let next_end = now + Duration::hours(BLOCK_DURATION_HOURS);
     Ok(Block {
         start_time: now,
         end_time: next_end,
         cost_usd: 0.0,
-        total_tokens: 0,
         is_active: false,
         hours_remaining: None,
     })

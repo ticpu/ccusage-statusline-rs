@@ -14,7 +14,6 @@ pub struct HookData {
 
 #[derive(Debug, Deserialize)]
 pub struct ModelInfo {
-    pub id: String,
     pub display_name: String,
 }
 
@@ -72,8 +71,30 @@ pub struct ModelPricing {
     pub cache_read_input_token_cost_above_200k_tokens: Option<f64>,
 }
 
+/// Per-token prices for the four token categories
+#[derive(Clone, Copy)]
+pub struct TokenPrices {
+    pub input: f64,
+    pub output: f64,
+    pub cache_write: f64,
+    pub cache_read: f64,
+}
+
 impl ModelPricing {
     pub const THRESHOLD: u64 = 200_000;
+
+    pub fn from_prices(base: TokenPrices, tiered: TokenPrices) -> Self {
+        Self {
+            input_cost_per_token: Some(base.input),
+            output_cost_per_token: Some(base.output),
+            cache_creation_input_token_cost: Some(base.cache_write),
+            cache_read_input_token_cost: Some(base.cache_read),
+            input_cost_per_token_above_200k_tokens: Some(tiered.input),
+            output_cost_per_token_above_200k_tokens: Some(tiered.output),
+            cache_creation_input_token_cost_above_200k_tokens: Some(tiered.cache_write),
+            cache_read_input_token_cost_above_200k_tokens: Some(tiered.cache_read),
+        }
+    }
 
     /// Calculate cost with tiered pricing
     pub fn calculate_tiered_cost(
@@ -144,12 +165,11 @@ pub struct Semaphore {
 }
 
 /// 5-hour billing block
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub start_time: DateTime<Utc>,
     pub end_time: DateTime<Utc>,
     pub cost_usd: f64,
-    pub total_tokens: u64,
     pub is_active: bool,
     pub hours_remaining: Option<f64>,
 }
@@ -178,6 +198,19 @@ pub struct BurnRate {
     pub critical_limit: LimitType,
     pub is_at_limit: bool,
     pub reset_in: Option<chrono::Duration>,
+}
+
+impl Default for BurnRate {
+    fn default() -> Self {
+        Self {
+            cost_per_hour: 0.0,
+            ratio: 0.0,
+            seven_day_ratio: 0.0,
+            critical_limit: LimitType::None,
+            is_at_limit: false,
+            reset_in: None,
+        }
+    }
 }
 
 /// Context information

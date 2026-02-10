@@ -32,14 +32,19 @@ make package
 
 ```
 src/
-├── main.rs - Entry point: CLI args, piped/interactive mode
-├── types.rs - All structs (HookData, Block, BurnRate, ApiUsageData, etc.)
+├── main.rs - Entry point: CLI args, piped/interactive mode, statusline assembly
+├── types.rs - All structs (HookData, Block, BurnRate, TokenPrices, ApiUsageData, etc.)
+├── paths.rs - Shared path helpers (home_dir, find_claude_paths, iter_jsonl_files)
 ├── install.rs - Install/uninstall commands for ~/.claude/settings.json
+├── config.rs - Statusline element configuration (enable/disable/reorder)
 ├── pricing.rs - LiteLLM pricing fetch from GitHub (24h cache)
 ├── blocks.rs - 5-hour billing block logic (dedup by messageId:requestId)
+├── burn_rate.rs - Burn rate calculation from block + API usage data
+├── context.rs - Context token calculation from transcript JSONL
 ├── cache.rs - Semaphore-based output caching (XDG_RUNTIME_DIR, 30s TTL)
 ├── format.rs - Output formatting (emojis, colors, directory formatting)
 ├── claude_binary.rs - Claude Code binary detection and User-Agent extraction
+├── claude_update.rs - Update availability check (stable/latest channels)
 └── api_usage.rs - Anthropic API client (OAuth from ~/.claude/.credentials.json)
 ```
 
