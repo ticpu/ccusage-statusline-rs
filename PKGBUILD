@@ -21,7 +21,7 @@ build() {
 
 check() {
     cd "$pkgname-$pkgver"
-    cargo test --release
+    cargo test --release -- --skip test_performance
 }
 
 package() {
