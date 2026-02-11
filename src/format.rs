@@ -94,29 +94,33 @@ fn format_days_remaining(remaining_hours: f64) -> String {
     }
 }
 
-/// Format duration in human readable form
-fn format_duration(duration: Duration) -> String {
-    let total_seconds = duration.num_seconds();
-    if total_seconds < 0 {
+/// Format ETA duration compactly: `87m`, `14h`, `3d1h`
+fn format_eta(duration: Duration) -> String {
+    let total_minutes = duration.num_minutes();
+    if total_minutes < 0 {
         return "0m".to_string();
     }
 
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
+    let total_hours = total_minutes as f64 / 60.0;
 
-    if hours > 0 {
-        format!("{}h{}m", hours, minutes)
+    if total_hours < 2.0 {
+        format!("{}m", total_minutes)
+    } else if total_hours < 24.0 {
+        format!("{}h", total_hours.round() as i64)
     } else {
-        format!("{}m", minutes)
+        let days = (total_hours / 24.0).floor() as i64;
+        let hours = (total_hours - days as f64 * 24.0).round() as i64;
+        if hours > 0 {
+            format!("{}d{}h", days, hours)
+        } else {
+            format!("{}d", days)
+        }
     }
 }
 
 /// Format burn rate with color indicator
-pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
+pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType, show_eta: bool) -> String {
     if burn_rate.is_at_limit {
-        if let Some(reset) = burn_rate.reset_in {
-            return format!("🔥limit {}", format_duration(reset));
-        }
         return "🔥limit".to_string();
     }
 
@@ -133,6 +137,18 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
         rate_str.green().to_string()
     };
 
+    let primary_eta = if show_eta && burn_rate.ratio >= 1.0 {
+        if let Some(reset_in) = burn_rate.reset_in {
+            let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.ratio;
+            let eta_duration = Duration::seconds(eta_seconds as i64);
+            format!("[⏱{}]", format_eta(eta_duration))
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
     let limit_str = match burn_rate.critical_limit {
         LimitType::FiveHour => " 5h",
         LimitType::SevenDay => " 7d",
@@ -142,14 +158,25 @@ pub fn format_burn_rate(burn_rate: &BurnRate, plan_type: PlanType) -> String {
     let seven_day_suffix =
         if burn_rate.seven_day_ratio >= 1.0 && burn_rate.critical_limit != LimitType::SevenDay {
             let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
-            format!(" {} 7d", format!("{}%", pct).red())
+            let seven_day_eta = if show_eta {
+                if let Some(reset_in) = burn_rate.seven_day_reset_in {
+                    let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.seven_day_ratio;
+                    let eta_duration = Duration::seconds(eta_seconds as i64);
+                    format!("[⏱{}]", format_eta(eta_duration))
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            format!(" {}{} 7d", format!("{}%", pct).red(), seven_day_eta)
         } else {
             String::new()
         };
 
     format!(
-        "🔥\u{200B}{}{}{}",
-        colored_rate, limit_str, seven_day_suffix
+        "🔥\u{200B}{}{}{}{}",
+        colored_rate, primary_eta, limit_str, seven_day_suffix
     )
 }
 
@@ -287,9 +314,10 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
+            seven_day_reset_in: None,
         };
-        assert!(format_burn_rate(&safe_burn, PlanType::Api).contains("$1.50/h"));
-        assert!(format_burn_rate(&safe_burn, PlanType::Subscription).contains("50%"));
+        assert!(format_burn_rate(&safe_burn, PlanType::Api, false).contains("$1.50/h"));
+        assert!(format_burn_rate(&safe_burn, PlanType::Subscription, false).contains("50%"));
 
         let warning_burn = BurnRate {
             cost_per_hour: 10.0,
@@ -298,9 +326,10 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
+            seven_day_reset_in: None,
         };
-        assert!(format_burn_rate(&warning_burn, PlanType::Api).contains("$10.00/h"));
-        assert!(format_burn_rate(&warning_burn, PlanType::Api).contains("5h"));
+        assert!(format_burn_rate(&warning_burn, PlanType::Api, false).contains("$10.00/h"));
+        assert!(format_burn_rate(&warning_burn, PlanType::Api, false).contains("5h"));
 
         let danger_burn = BurnRate {
             cost_per_hour: 15.0,
@@ -309,9 +338,10 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
+            seven_day_reset_in: None,
         };
-        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("140%"));
-        assert!(format_burn_rate(&danger_burn, PlanType::Subscription).contains("5h"));
+        assert!(format_burn_rate(&danger_burn, PlanType::Subscription, false).contains("140%"));
+        assert!(format_burn_rate(&danger_burn, PlanType::Subscription, false).contains("5h"));
     }
 
     #[test]
@@ -323,8 +353,9 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
+            seven_day_reset_in: None,
         };
-        let result = format_burn_rate(&burn_with_7d, PlanType::Subscription);
+        let result = format_burn_rate(&burn_with_7d, PlanType::Subscription, false);
         assert!(result.contains("50%"));
         assert!(result.contains("5h"));
         assert!(result.contains("110%"));
@@ -337,8 +368,9 @@ mod tests {
             critical_limit: LimitType::SevenDay,
             is_at_limit: false,
             reset_in: None,
+            seven_day_reset_in: None,
         };
-        let result = format_burn_rate(&burn_7d_critical, PlanType::Subscription);
+        let result = format_burn_rate(&burn_7d_critical, PlanType::Subscription, false);
         assert!(result.contains("110%"));
         assert!(result.contains(" 7d"));
         assert_eq!(result.matches("7d").count(), 1);
@@ -353,8 +385,9 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             is_at_limit: false,
             reset_in: None,
+            seven_day_reset_in: None,
         };
-        let result = format_burn_rate(&burn, PlanType::Subscription);
+        let result = format_burn_rate(&burn, PlanType::Subscription, false);
         assert_eq!(result.matches('%').count(), 2);
         assert!(result.contains(" 7d"));
         let stripped = strip_ansi_codes(&result);
@@ -368,6 +401,178 @@ mod tests {
             "expected '140% 5h' in '{}'",
             stripped
         );
+    }
+
+    #[test]
+    fn test_format_burn_rate_at_limit() {
+        let burn = BurnRate {
+            cost_per_hour: 10.0,
+            ratio: 0.0,
+            seven_day_ratio: 0.0,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: true,
+            reset_in: Some(Duration::hours(2) + Duration::minutes(15)),
+            seven_day_reset_in: None,
+        };
+        let result = format_burn_rate_verbose(&burn, PlanType::Subscription, true);
+        assert_eq!(result, "🔥limit");
+    }
+
+    #[test]
+    fn test_format_burn_rate_eta_over_100_5h() {
+        let burn = BurnRate {
+            cost_per_hour: 10.0,
+            ratio: 1.4,
+            seven_day_ratio: 0.5,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: Some(Duration::hours(3)),
+            seven_day_reset_in: Some(Duration::hours(100)),
+        };
+        let result = format_burn_rate_verbose(&burn, PlanType::Subscription, true);
+        let stripped = strip_ansi_codes(&result);
+        // 3h / 1.4 = 2.14h → rounds to 2h
+        assert!(
+            stripped.contains("[⏱2h]"),
+            "expected '[⏱2h]' in '{}'",
+            stripped
+        );
+    }
+
+    #[test]
+    fn test_format_burn_rate_eta_over_100_7d() {
+        let burn = BurnRate {
+            cost_per_hour: 10.0,
+            ratio: 1.57,
+            seven_day_ratio: 0.5,
+            critical_limit: LimitType::SevenDay,
+            is_at_limit: false,
+            reset_in: Some(Duration::hours(73)),
+            seven_day_reset_in: Some(Duration::hours(100)),
+        };
+        let result = format_burn_rate_verbose(&burn, PlanType::Subscription, true);
+        let stripped = strip_ansi_codes(&result);
+        assert!(
+            stripped.contains("[⏱1d22h]"),
+            "expected '[⏱1d22h]' in '{}'",
+            stripped
+        );
+    }
+
+    #[test]
+    fn test_format_burn_rate_eta_both_over_100() {
+        let burn = BurnRate {
+            cost_per_hour: 10.0,
+            ratio: 1.4,
+            seven_day_ratio: 1.1,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: Some(Duration::hours(3)),
+            seven_day_reset_in: Some(Duration::hours(100)),
+        };
+        let result = format_burn_rate_verbose(&burn, PlanType::Subscription, true);
+        let stripped = strip_ansi_codes(&result);
+        // 3h / 1.4 = 2.14h → rounds to 2h
+        assert!(
+            stripped.contains("[⏱2h]"),
+            "expected primary ETA '[⏱2h]' in '{}'",
+            stripped
+        );
+        // 100h / 1.1 = 90.9h = 3d19h
+        assert!(
+            stripped.contains("[⏱3d19h]"),
+            "expected 7d ETA '[⏱3d19h]' in '{}'",
+            stripped
+        );
+    }
+
+    #[test]
+    fn test_format_burn_rate_eta_minutes() {
+        let burn = BurnRate {
+            cost_per_hour: 10.0,
+            ratio: 1.5,
+            seven_day_ratio: 0.5,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            // 3h / 1.5 = 2h = 120m, but seconds: 10800/1.5 = 7200s = 120m
+            // Use 2h58m so: 10680s / 1.5 = 7120s = 118.67m → 118m
+            reset_in: Some(Duration::minutes(178)),
+            seven_day_reset_in: None,
+        };
+        let result = format_burn_rate_verbose(&burn, PlanType::Subscription, true);
+        let stripped = strip_ansi_codes(&result);
+        // 178m / 1.5 = 118.67m → 118m (< 2h, shows minutes)
+        assert!(
+            stripped.contains("[⏱118m]"),
+            "expected '[⏱118m]' in '{}'",
+            stripped
+        );
+    }
+
+    #[test]
+    fn test_format_burn_rate_eta_under_100_no_show() {
+        let burn = BurnRate {
+            cost_per_hour: 5.0,
+            ratio: 0.8,
+            seven_day_ratio: 0.5,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: Some(Duration::hours(3)),
+            seven_day_reset_in: Some(Duration::hours(100)),
+        };
+        let result = format_burn_rate_verbose(&burn, PlanType::Subscription, true);
+        assert!(
+            !result.contains("⏱"),
+            "should not contain ETA when ratio < 1.0"
+        );
+    }
+
+    #[test]
+    fn test_format_burn_rate_eta_disabled() {
+        let burn = BurnRate {
+            cost_per_hour: 10.0,
+            ratio: 1.4,
+            seven_day_ratio: 0.5,
+            critical_limit: LimitType::FiveHour,
+            is_at_limit: false,
+            reset_in: Some(Duration::hours(3)),
+            seven_day_reset_in: Some(Duration::hours(100)),
+        };
+        let result = format_burn_rate_verbose(&burn, PlanType::Subscription, false);
+        assert!(
+            !result.contains("⏱"),
+            "should not contain ETA when show_eta=false"
+        );
+    }
+
+    #[test]
+    fn test_format_eta_minutes_only() {
+        assert_eq!(format_eta(Duration::minutes(87)), "87m");
+        assert_eq!(format_eta(Duration::minutes(119)), "119m");
+    }
+
+    #[test]
+    fn test_format_eta_days_hours() {
+        assert_eq!(format_eta(Duration::hours(25)), "1d1h");
+        assert_eq!(format_eta(Duration::hours(73)), "3d1h");
+        assert_eq!(format_eta(Duration::hours(48)), "2d");
+    }
+
+    #[test]
+    fn test_format_eta_hours_only() {
+        assert_eq!(format_eta(Duration::hours(2)), "2h");
+        assert_eq!(format_eta(Duration::hours(14)), "14h");
+        assert_eq!(format_eta(Duration::hours(23)), "23h");
+    }
+
+    fn format_burn_rate_verbose(
+        burn_rate: &BurnRate,
+        plan_type: PlanType,
+        show_eta: bool,
+    ) -> String {
+        let result = format_burn_rate(burn_rate, plan_type, show_eta);
+        eprintln!("  {}", result);
+        result
     }
 
     fn strip_ansi_codes(s: &str) -> String {

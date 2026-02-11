@@ -118,7 +118,7 @@ fn run_interactive_mode() -> Result<()> {
         parts.push(time);
     }
 
-    parts.push(format_burn_rate(&burn_rate, plan_type));
+    parts.push(format_burn_rate(&burn_rate, plan_type, false));
 
     if api_result.is_stale() {
         parts.push("📊(api error)".to_string());
@@ -207,8 +207,12 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                     parts.push(time);
                 }
             }
+            StatusElement::BurnRateEta => {}
             StatusElement::BurnRate => {
-                parts.push(format_burn_rate(&burn_rate, plan_type));
+                let show_eta = statusline_config
+                    .enabled_elements
+                    .contains(&StatusElement::BurnRateEta);
+                parts.push(format_burn_rate(&burn_rate, plan_type, show_eta));
             }
             StatusElement::Context => {
                 parts.push(format!("🧠{}", format_context(context_info.as_ref())));

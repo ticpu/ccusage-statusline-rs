@@ -198,6 +198,7 @@ pub struct BurnRate {
     pub critical_limit: LimitType,
     pub is_at_limit: bool,
     pub reset_in: Option<chrono::Duration>,
+    pub seven_day_reset_in: Option<chrono::Duration>,
 }
 
 impl Default for BurnRate {
@@ -209,6 +210,7 @@ impl Default for BurnRate {
             critical_limit: LimitType::None,
             is_at_limit: false,
             reset_in: None,
+            seven_day_reset_in: None,
         }
     }
 }

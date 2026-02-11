@@ -68,6 +68,7 @@ pub fn calculate_burn_rate(block: &Block, api_usage: Option<&ApiUsageData>) -> R
 
     let is_at_limit = api_usage.five_hour_percent >= 100.0 || api_usage.seven_day_percent >= 100.0;
     let reset_in = reset_at.map(|reset| reset - now);
+    let seven_day_reset_in = api_usage.seven_day_resets_at.map(|reset| reset - now);
 
     Ok(BurnRate {
         cost_per_hour,
@@ -76,6 +77,7 @@ pub fn calculate_burn_rate(block: &Block, api_usage: Option<&ApiUsageData>) -> R
         critical_limit,
         is_at_limit,
         reset_in,
+        seven_day_reset_in,
     })
 }
 
