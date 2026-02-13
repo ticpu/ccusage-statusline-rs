@@ -118,7 +118,9 @@ fn run_interactive_mode() -> Result<()> {
         parts.push(time);
     }
 
-    parts.push(format_burn_rate(&burn_rate, plan_type, false));
+    if let Some(s) = format_burn_rate_component(&burn_rate, plan_type, true, false) {
+        parts.push(s);
+    }
 
     if api_result.is_stale() {
         parts.push("📊(api error)".to_string());
@@ -188,6 +190,7 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
 
     let mut parts = Vec::new();
     let mut api_metrics_emitted = false;
+    let mut burn_rate_emitted = false;
 
     for element in &statusline_config.enabled_elements {
         match element {
@@ -207,12 +210,18 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                     parts.push(time);
                 }
             }
-            StatusElement::BurnRateEta => {}
-            StatusElement::BurnRate => {
-                let show_eta = statusline_config
-                    .enabled_elements
-                    .contains(&StatusElement::BurnRateEta);
-                parts.push(format_burn_rate(&burn_rate, plan_type, show_eta));
+            StatusElement::BurnRate | StatusElement::BurnRateEta => {
+                if !burn_rate_emitted {
+                    burn_rate_emitted = true;
+                    let enabled = &statusline_config.enabled_elements;
+                    let show_rate = enabled.contains(&StatusElement::BurnRate);
+                    let show_eta = enabled.contains(&StatusElement::BurnRateEta);
+                    if let Some(s) =
+                        format_burn_rate_component(&burn_rate, plan_type, show_rate, show_eta)
+                    {
+                        parts.push(s);
+                    }
+                }
             }
             StatusElement::Context => {
                 parts.push(format!("🧠{}", format_context(context_info.as_ref())));

@@ -8,7 +8,7 @@ Developer quick-start for ccusage-statusline-rs. Rust implementation of Claude C
 # Build and test
 cargo fmt && cargo clippy --fix --allow-dirty
 cargo check --message-format=short
-cargo test --message-format=short
+cargo test --release --message-format=short
 cargo build --release
 
 # Install to system and configure Claude
@@ -95,7 +95,7 @@ src/
 ```bash
 cargo fmt                                    # CRITICAL: CI will fail if not formatted
 cargo clippy --fix --allow-dirty --message-format=short
-cargo test --message-format=short
+cargo test --release --message-format=short
 ```
 
 **Version management** (single source of truth in `Cargo.toml`):

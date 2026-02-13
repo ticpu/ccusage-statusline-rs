@@ -22,6 +22,7 @@ High-performance statusline for Claude Code that displays real-time usage metric
 - **5-hour block tracking** - Matches Claude's billing cycles exactly
 - **Deduplication** - Prevents double-counting duplicate JSONL entries
 - **Burn rate monitoring** - Real-time cost per hour with visual indicators
+- **Coding time remaining** - How much time you can continue coding at the current rate
 - **Auto-install** - Creates ~/.claude/settings.json if missing during install
 
 ## Inspiration
