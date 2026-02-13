@@ -129,10 +129,14 @@ pub fn format_burn_rate_component(
         return None;
     }
 
+    let eta = show_eta && matches!(plan_type, PlanType::Subscription);
+
     if show_rate {
-        Some(format_rate_display(burn_rate, plan_type, show_eta))
-    } else {
+        Some(format_rate_display(burn_rate, plan_type, eta))
+    } else if eta {
         format_eta_only(burn_rate)
+    } else {
+        None
     }
 }
 
