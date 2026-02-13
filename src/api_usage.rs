@@ -107,14 +107,15 @@ pub fn get_plan_type() -> PlanType {
 
 /// Fetch usage data from Anthropic API with filesystem-based caching and advisory locks
 pub fn fetch_usage() -> ApiUsageResult {
+    // Check credentials first - if missing, skip network calls entirely
+    if read_oauth_credentials().is_err() {
+        return ApiUsageResult::Unavailable;
+    }
+
     match fetch_usage_with_lock() {
         Ok(data) => ApiUsageResult::Ok(data),
         Err(e) => {
             eprintln!("Failed to fetch API usage: {}", e);
-            // Check if we have credentials at all
-            if read_oauth_credentials().is_err() {
-                return ApiUsageResult::Unavailable;
-            }
             // Check cache age - if too old, report error
             if let Ok(cache_path) = get_api_cache_path()
                 && let Ok(metadata) = fs::metadata(&cache_path)
