@@ -23,9 +23,13 @@ fn get_clock_emoji(remaining_hours: f64) -> &'static str {
     CLOCKS[idx]
 }
 
-/// Format 5-hour time remaining
-pub fn format_time_remaining_5h(block: &Block, api_usage: Option<&ApiUsageData>) -> Option<String> {
-    if !block.is_active {
+/// Format 5-hour time remaining (subscription only)
+pub fn format_time_remaining_5h(
+    block: &Block,
+    api_usage: Option<&ApiUsageData>,
+    plan_type: PlanType,
+) -> Option<String> {
+    if matches!(plan_type, PlanType::Api) || !block.is_active {
         return None;
     }
 
@@ -43,8 +47,15 @@ pub fn format_time_remaining_5h(block: &Block, api_usage: Option<&ApiUsageData>)
     Some(format_hours_remaining(remaining_hours))
 }
 
-/// Format 7-day time remaining
-pub fn format_time_remaining_7d(api_usage: Option<&ApiUsageData>) -> Option<String> {
+/// Format 7-day time remaining (subscription only)
+pub fn format_time_remaining_7d(
+    api_usage: Option<&ApiUsageData>,
+    plan_type: PlanType,
+) -> Option<String> {
+    if matches!(plan_type, PlanType::Api) {
+        return None;
+    }
+
     let now = Utc::now();
 
     if let Some(api) = api_usage

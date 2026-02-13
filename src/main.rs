@@ -114,7 +114,7 @@ fn run_interactive_mode() -> Result<()> {
 
     parts.push(format!("💰{}", format_block_info(&block)));
 
-    if let Some(time) = format_time_remaining_5h(&block, api_usage.as_ref()) {
+    if let Some(time) = format_time_remaining_5h(&block, api_usage.as_ref(), plan_type) {
         parts.push(time);
     }
 
@@ -201,12 +201,13 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                 parts.push(format!("💰{}", format_block_info(&block)));
             }
             StatusElement::TimeRemaining5h => {
-                if let Some(time) = format_time_remaining_5h(&block, api_usage.as_ref()) {
+                if let Some(time) = format_time_remaining_5h(&block, api_usage.as_ref(), plan_type)
+                {
                     parts.push(time);
                 }
             }
             StatusElement::TimeRemaining7d => {
-                if let Some(time) = format_time_remaining_7d(api_usage.as_ref()) {
+                if let Some(time) = format_time_remaining_7d(api_usage.as_ref(), plan_type) {
                     parts.push(time);
                 }
             }
