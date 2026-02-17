@@ -1,6 +1,6 @@
 use crate::paths::home_dir;
 use anyhow::Result;
-use inquire::{CustomType, MultiSelect, Select};
+use inquire::{CustomType, InquireError, MultiSelect, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -269,7 +269,11 @@ pub fn run_config_menu() -> Result<()> {
             MainMenu::SaveAndExit,
         ];
 
-        let choice = Select::new("Configure statusline:", menu).prompt()?;
+        let choice = match Select::new("Configure statusline:", menu).prompt() {
+            Ok(c) => c,
+            Err(InquireError::OperationCanceled) => break,
+            Err(e) => return Err(e.into()),
+        };
 
         match choice {
             MainMenu::Elements => configure_elements(&mut config)?,
@@ -310,10 +314,15 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
         .map(|(i, _)| i)
         .collect();
 
-    let selected = MultiSelect::new("Select elements to display:", options)
+    let selected = match MultiSelect::new("Select elements to display:", options)
         .with_default(&default_indices)
         .with_page_size(15)
-        .prompt()?;
+        .prompt()
+    {
+        Ok(s) => s,
+        Err(InquireError::OperationCanceled) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
 
     config.enabled_elements = selected
         .iter()
@@ -339,28 +348,47 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
             ThresholdMenu::Back,
         ];
 
-        let choice = Select::new("Thresholds:", menu).prompt()?;
+        let choice = match Select::new("Thresholds:", menu).prompt() {
+            Ok(c) => c,
+            Err(InquireError::OperationCanceled) => break,
+            Err(e) => return Err(e.into()),
+        };
 
         match choice {
             ThresholdMenu::BurnRateShow(_) => {
-                thresholds.burn_rate_show =
-                    prompt_threshold("Burn rate visibility % (0-100):", thresholds.burn_rate_show)?;
+                if let Some(v) =
+                    prompt_threshold("Burn rate visibility % (0-100):", thresholds.burn_rate_show)?
+                {
+                    thresholds.burn_rate_show = v;
+                }
             }
             ThresholdMenu::BurnRateWarning(_) => {
-                thresholds.burn_rate_warning =
-                    prompt_threshold("Burn rate warning % (0-100):", thresholds.burn_rate_warning)?;
+                if let Some(v) =
+                    prompt_threshold("Burn rate warning % (0-100):", thresholds.burn_rate_warning)?
+                {
+                    thresholds.burn_rate_warning = v;
+                }
             }
             ThresholdMenu::BurnRateDanger(_) => {
-                thresholds.burn_rate_danger =
-                    prompt_threshold("Burn rate danger % (0-200):", thresholds.burn_rate_danger)?;
+                if let Some(v) =
+                    prompt_threshold("Burn rate danger % (0-200):", thresholds.burn_rate_danger)?
+                {
+                    thresholds.burn_rate_danger = v;
+                }
             }
             ThresholdMenu::ContextWarning(_) => {
-                thresholds.context_warning =
-                    prompt_threshold("Context warning % (0-100):", thresholds.context_warning)?;
+                if let Some(v) =
+                    prompt_threshold("Context warning % (0-100):", thresholds.context_warning)?
+                {
+                    thresholds.context_warning = v;
+                }
             }
             ThresholdMenu::ContextDanger(_) => {
-                thresholds.context_danger =
-                    prompt_threshold("Context danger % (0-100):", thresholds.context_danger)?;
+                if let Some(v) =
+                    prompt_threshold("Context danger % (0-100):", thresholds.context_danger)?
+                {
+                    thresholds.context_danger = v;
+                }
             }
             ThresholdMenu::Back => break,
         }
@@ -369,8 +397,8 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
     Ok(())
 }
 
-fn prompt_threshold(message: &str, current: u32) -> Result<u32> {
-    let value = CustomType::<u32>::new(message)
+fn prompt_threshold(message: &str, current: u32) -> Result<Option<u32>> {
+    match CustomType::<u32>::new(message)
         .with_default(current)
         .with_error_message("Enter a number between 0 and 200")
         .with_validator(|val: &u32| {
@@ -382,8 +410,12 @@ fn prompt_threshold(message: &str, current: u32) -> Result<u32> {
                 ))
             }
         })
-        .prompt()?;
-    Ok(value)
+        .prompt()
+    {
+        Ok(v) => Ok(Some(v)),
+        Err(InquireError::OperationCanceled) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn print_help() {
