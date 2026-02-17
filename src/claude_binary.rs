@@ -16,9 +16,15 @@ struct VersionCache {
 
 /// Get Claude binary path from PATH
 fn get_claude_binary_path() -> Option<PathBuf> {
-    let output = Command::new("which").arg("claude").output().ok()?;
+    let output = Command::new("which")
+        .arg("claude")
+        .output()
+        .ok()?;
 
-    if !output.status.success() {
+    if !output
+        .status
+        .success()
+    {
         return None;
     }
 
@@ -29,7 +35,9 @@ fn get_claude_binary_path() -> Option<PathBuf> {
 /// Get binary modification time as unix timestamp
 fn get_binary_mtime(path: &PathBuf) -> Option<u64> {
     let metadata = fs::metadata(path).ok()?;
-    let mtime = metadata.modified().ok()?;
+    let mtime = metadata
+        .modified()
+        .ok()?;
     mtime
         .duration_since(SystemTime::UNIX_EPOCH)
         .ok()
@@ -71,14 +79,23 @@ fn save_version_cache(version: &str, mtime: u64) {
 
 /// Fetch version from `claude --version`
 fn fetch_claude_version() -> Option<String> {
-    let output = Command::new("claude").arg("--version").output().ok()?;
+    let output = Command::new("claude")
+        .arg("--version")
+        .output()
+        .ok()?;
 
-    if !output.status.success() {
+    if !output
+        .status
+        .success()
+    {
         return None;
     }
 
     let version_output = String::from_utf8(output.stdout).ok()?;
-    version_output.split_whitespace().next().map(String::from)
+    version_output
+        .split_whitespace()
+        .next()
+        .map(String::from)
 }
 
 /// Get Claude Code version (cached based on binary mtime)

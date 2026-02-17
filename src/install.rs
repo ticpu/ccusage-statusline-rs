@@ -17,7 +17,9 @@ fn prompt_yes_no(prompt: &str) -> Result<bool> {
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
 
-    Ok(input.trim().eq_ignore_ascii_case("y"))
+    Ok(input
+        .trim()
+        .eq_ignore_ascii_case("y"))
 }
 
 /// Install statusLine configuration
@@ -92,7 +94,10 @@ pub fn uninstall() -> Result<()> {
         serde_json::from_str(&content).context("Failed to parse settings.json (invalid JSON)")?;
 
     // Check if statusLine exists
-    if settings.get("statusLine").is_none() {
+    if settings
+        .get("statusLine")
+        .is_none()
+    {
         println!("ℹ️  statusLine is not configured. Nothing to uninstall.");
         return Ok(());
     }

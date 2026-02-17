@@ -38,9 +38,14 @@ impl PricingFetcher {
 
         // Try to fetch fresh pricing
         match reqwest::blocking::get(Self::LITELLM_URL) {
-            Ok(response) if response.status().is_success() => {
-                let models: HashMap<String, ModelPricing> =
-                    response.json().context("Failed to parse pricing JSON")?;
+            Ok(response)
+                if response
+                    .status()
+                    .is_success() =>
+            {
+                let models: HashMap<String, ModelPricing> = response
+                    .json()
+                    .context("Failed to parse pricing JSON")?;
 
                 // Cache the result
                 let cache = PricingCache {
@@ -69,7 +74,10 @@ impl PricingFetcher {
     /// Get pricing for a specific model
     fn get_model_pricing(&self, model_name: &str) -> Option<&ModelPricing> {
         // Try exact match first
-        if let Some(pricing) = self.models.get(model_name) {
+        if let Some(pricing) = self
+            .models
+            .get(model_name)
+        {
             return Some(pricing);
         }
 
@@ -77,7 +85,10 @@ impl PricingFetcher {
         let prefixes = ["anthropic/", "claude-", "openai/"];
         for prefix in &prefixes {
             let candidate = format!("{}{}", prefix, model_name);
-            if let Some(pricing) = self.models.get(&candidate) {
+            if let Some(pricing) = self
+                .models
+                .get(&candidate)
+            {
                 return Some(pricing);
             }
         }
@@ -95,10 +106,16 @@ impl PricingFetcher {
 
     /// Calculate cost for a usage entry
     pub fn calculate_entry_cost(&self, entry: &UsageData) -> f64 {
-        if let Some(model_name) = &entry.message.model
+        if let Some(model_name) = &entry
+            .message
+            .model
             && let Some(pricing) = self.get_model_pricing(model_name)
         {
-            return pricing.calculate_cost(&entry.message.usage);
+            return pricing.calculate_cost(
+                &entry
+                    .message
+                    .usage,
+            );
         }
         // Fallback to hardcoded estimate if model not found
         estimate_cost_fallback(entry)
@@ -148,5 +165,9 @@ fn estimate_cost_fallback(entry: &UsageData) -> f64 {
         ModelPricing::from_prices(base, tiered)
     };
 
-    pricing.calculate_cost(&entry.message.usage)
+    pricing.calculate_cost(
+        &entry
+            .message
+            .usage,
+    )
 }

@@ -166,11 +166,19 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
 
         for line in reader.lines() {
             let line = line?;
-            if line.trim().is_empty() {
+            if line
+                .trim()
+                .is_empty()
+            {
                 continue;
             }
             if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
-                if let (Some(msg_id), Some(req_id)) = (&entry.message.id, &entry.request_id) {
+                if let (Some(msg_id), Some(req_id)) = (
+                    &entry
+                        .message
+                        .id,
+                    &entry.request_id,
+                ) {
                     let mut hash = String::with_capacity(msg_id.len() + req_id.len() + 1);
                     hash.push_str(msg_id);
                     hash.push(':');
@@ -186,12 +194,18 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
         }
     }
 
-    all_entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    all_entries.sort_by(|a, b| {
+        a.timestamp
+            .cmp(&b.timestamp)
+    });
 
     let blocks = group_into_blocks(&all_entries, pricing)?;
 
     let now = Utc::now();
-    for block in blocks.iter().rev() {
+    for block in blocks
+        .iter()
+        .rev()
+    {
         if block.is_active && block.end_time > now {
             return Ok(block.clone());
         }

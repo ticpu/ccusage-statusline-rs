@@ -98,7 +98,13 @@ fn read_oauth_credentials() -> Result<String> {
 pub fn get_plan_type() -> PlanType {
     match read_credentials() {
         Ok(creds) => match creds.claude_ai_oauth {
-            Some(oauth) if oauth.subscription_type.is_some() => PlanType::Subscription,
+            Some(oauth)
+                if oauth
+                    .subscription_type
+                    .is_some() =>
+            {
+                PlanType::Subscription
+            }
             _ => PlanType::Api,
         },
         Err(_) => PlanType::Api,
@@ -205,12 +211,18 @@ fn parse_api_response(api_response: ApiResponse) -> ApiUsageData {
     let five_hour_resets_at = api_response
         .five_hour
         .resets_at
-        .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+        .and_then(|s| {
+            s.parse::<DateTime<Utc>>()
+                .ok()
+        });
 
     let seven_day_resets_at = api_response
         .seven_day
         .resets_at
-        .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+        .and_then(|s| {
+            s.parse::<DateTime<Utc>>()
+                .ok()
+        });
 
     let seven_day_sonnet_percent = api_response
         .seven_day_sonnet
@@ -218,9 +230,13 @@ fn parse_api_response(api_response: ApiResponse) -> ApiUsageData {
         .unwrap_or(0.0);
 
     ApiUsageData {
-        five_hour_percent: api_response.five_hour.utilization,
+        five_hour_percent: api_response
+            .five_hour
+            .utilization,
         five_hour_resets_at,
-        seven_day_percent: api_response.seven_day.utilization,
+        seven_day_percent: api_response
+            .seven_day
+            .utilization,
         seven_day_resets_at,
         seven_day_sonnet_percent,
     }
@@ -245,7 +261,10 @@ fn fetch_api_response() -> Result<ApiResponse> {
         .send()
         .context("Failed to send request to Anthropic API")?;
 
-    if !response.status().is_success() {
+    if !response
+        .status()
+        .is_success()
+    {
         anyhow::bail!("API returned status: {}", response.status());
     }
 
@@ -294,7 +313,11 @@ mod tests {
             for _ in 0..10 {
                 if let Ok(mut file) = File::open(&cache_path_clone) {
                     let mut contents = String::new();
-                    if file.read_to_string(&mut contents).is_ok() && !contents.is_empty() {
+                    if file
+                        .read_to_string(&mut contents)
+                        .is_ok()
+                        && !contents.is_empty()
+                    {
                         // Should always parse successfully - never see partial data
                         assert!(serde_json::from_str::<ApiResponse>(&contents).is_ok());
                     }
@@ -323,7 +346,9 @@ mod tests {
         fs::write(&temp_path, serde_json::to_string(&new_response).unwrap()).unwrap();
         fs::rename(&temp_path, &cache_path).unwrap();
 
-        reader.join().unwrap();
+        reader
+            .join()
+            .unwrap();
         fs::remove_dir_all(&cache_dir).unwrap();
     }
 
@@ -369,14 +394,19 @@ mod tests {
             let mut file = File::open(&*cache_path_reader).unwrap();
             FileExt::lock_shared(&file).unwrap(); // Should block until writer releases
             let mut contents = String::new();
-            file.read_to_string(&mut contents).unwrap();
+            file.read_to_string(&mut contents)
+                .unwrap();
             assert!(!contents.is_empty());
             assert!(serde_json::from_str::<ApiResponse>(&contents).is_ok());
             FileExt::unlock(&file).unwrap();
         });
 
-        writer.join().unwrap();
-        reader.join().unwrap();
+        writer
+            .join()
+            .unwrap();
+        reader
+            .join()
+            .unwrap();
         fs::remove_dir_all(&cache_dir).unwrap();
     }
 
@@ -403,7 +433,9 @@ mod tests {
                     .open(&*cache_path_thread)
                     .unwrap();
                 if FileExt::try_lock_exclusive(&file).is_ok() {
-                    *count.lock().unwrap() += 1;
+                    *count
+                        .lock()
+                        .unwrap() += 1;
                     thread::sleep(Duration::from_millis(50));
                     FileExt::unlock(&file).unwrap();
                 }
@@ -412,11 +444,18 @@ mod tests {
         }
 
         for handle in handles {
-            handle.join().unwrap();
+            handle
+                .join()
+                .unwrap();
         }
 
         // Only one thread should have acquired exclusive lock
-        assert_eq!(*acquired_count.lock().unwrap(), 1);
+        assert_eq!(
+            *acquired_count
+                .lock()
+                .unwrap(),
+            1
+        );
         fs::remove_dir_all(&cache_dir).unwrap();
     }
 
@@ -430,16 +469,34 @@ mod tests {
             seven_day_sonnet_percent: 5.0,
         };
         let result = ApiUsageResult::Ok(data.clone());
-        assert!(result.data().is_some());
-        assert_eq!(result.data().unwrap().five_hour_percent, 25.0);
+        assert!(
+            result
+                .data()
+                .is_some()
+        );
+        assert_eq!(
+            result
+                .data()
+                .unwrap()
+                .five_hour_percent,
+            25.0
+        );
         assert!(!result.is_stale());
 
         let stale = ApiUsageResult::StaleCache;
-        assert!(stale.data().is_none());
+        assert!(
+            stale
+                .data()
+                .is_none()
+        );
         assert!(stale.is_stale());
 
         let unavailable = ApiUsageResult::Unavailable;
-        assert!(unavailable.data().is_none());
+        assert!(
+            unavailable
+                .data()
+                .is_none()
+        );
         assert!(!unavailable.is_stale());
     }
 }

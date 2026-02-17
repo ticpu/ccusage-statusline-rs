@@ -43,13 +43,25 @@ pub fn calculate_context_tokens(transcript_path: &str) -> Result<Option<ContextI
 
     for line in reader.lines() {
         let line = line?;
-        if line.trim().is_empty() {
+        if line
+            .trim()
+            .is_empty()
+        {
             continue;
         }
         if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
-            let context = entry.message.usage.input_tokens
-                + entry.message.usage.cache_creation_input_tokens
-                + entry.message.usage.cache_read_input_tokens;
+            let context = entry
+                .message
+                .usage
+                .input_tokens
+                + entry
+                    .message
+                    .usage
+                    .cache_creation_input_tokens
+                + entry
+                    .message
+                    .usage
+                    .cache_read_input_tokens;
             last_tokens = Some(context);
         }
     }

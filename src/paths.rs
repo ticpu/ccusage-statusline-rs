@@ -43,7 +43,11 @@ pub fn iter_jsonl_files(claude_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 
             for session_entry in fs::read_dir(&project_path)? {
                 let session_path = session_entry?.path();
-                if session_path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                if session_path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    == Some("jsonl")
+                {
                     files.push(session_path);
                 }
             }

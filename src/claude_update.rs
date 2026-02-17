@@ -82,12 +82,19 @@ fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
                 .send()
                 .context("Failed to fetch GCS stable version")?;
 
-            if !response.status().is_success() {
+            if !response
+                .status()
+                .is_success()
+            {
                 anyhow::bail!("GCS returned status: {}", response.status());
             }
 
-            let version = response.text().context("Failed to read version")?;
-            Ok(version.trim().to_string())
+            let version = response
+                .text()
+                .context("Failed to read version")?;
+            Ok(version
+                .trim()
+                .to_string())
         }
         VersionChannel::Latest => {
             let response = client
@@ -95,7 +102,10 @@ fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
                 .send()
                 .context("Failed to fetch npm registry")?;
 
-            if !response.status().is_success() {
+            if !response
+                .status()
+                .is_success()
+            {
                 anyhow::bail!("npm registry returned status: {}", response.status());
             }
 
@@ -103,7 +113,9 @@ fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
                 .json()
                 .context("Failed to parse npm registry response")?;
 
-            Ok(data.dist_tags.latest)
+            Ok(data
+                .dist_tags
+                .latest)
         }
     }
 }
