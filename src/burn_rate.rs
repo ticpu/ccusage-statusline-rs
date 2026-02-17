@@ -2,7 +2,11 @@ use crate::types::{ApiUsageData, Block, BurnRate, LimitType};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
-pub fn calculate_burn_rate(block: &Block, api_usage: Option<&ApiUsageData>) -> Result<BurnRate> {
+pub fn calculate_burn_rate(
+    block: &Block,
+    api_usage: Option<&ApiUsageData>,
+    burn_rate_show_ratio: f64,
+) -> Result<BurnRate> {
     if !block.is_active {
         return Ok(BurnRate::default());
     }
@@ -38,13 +42,13 @@ pub fn calculate_burn_rate(block: &Block, api_usage: Option<&ApiUsageData>) -> R
         168.0,
     );
 
-    let (critical_limit, ratio, reset_at) = if five_hour_ratio >= 0.8 {
+    let (critical_limit, ratio, reset_at) = if five_hour_ratio >= burn_rate_show_ratio {
         (
             LimitType::FiveHour,
             five_hour_ratio,
             api_usage.five_hour_resets_at,
         )
-    } else if seven_day_ratio >= 0.8 {
+    } else if seven_day_ratio >= burn_rate_show_ratio {
         (
             LimitType::SevenDay,
             seven_day_ratio,
@@ -68,7 +72,9 @@ pub fn calculate_burn_rate(block: &Block, api_usage: Option<&ApiUsageData>) -> R
 
     let is_at_limit = api_usage.five_hour_percent >= 100.0 || api_usage.seven_day_percent >= 100.0;
     let reset_in = reset_at.map(|reset| reset - now);
-    let seven_day_reset_in = api_usage.seven_day_resets_at.map(|reset| reset - now);
+    let seven_day_reset_in = api_usage
+        .seven_day_resets_at
+        .map(|reset| reset - now);
 
     Ok(BurnRate {
         cost_per_hour,

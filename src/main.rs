@@ -101,14 +101,22 @@ fn run_interactive_mode() -> Result<()> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
+    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+    let thresholds = &statusline_config.thresholds;
     let plan_type = api_usage::get_plan_type();
     let api_result = api_usage::fetch_usage();
-    let api_usage = api_result.data().cloned();
+    let api_usage = api_result
+        .data()
+        .cloned();
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
     let block = find_active_block(&claude_paths, &pricing)?;
-    let burn_rate = calculate_burn_rate(&block, api_usage.as_ref())?;
+    let burn_rate = calculate_burn_rate(
+        &block,
+        api_usage.as_ref(),
+        thresholds.burn_rate_show_ratio(),
+    )?;
 
     let mut parts = Vec::new();
 
@@ -118,7 +126,7 @@ fn run_interactive_mode() -> Result<()> {
         parts.push(time);
     }
 
-    if let Some(s) = format_burn_rate_component(&burn_rate, plan_type, true, false) {
+    if let Some(s) = format_burn_rate_component(&burn_rate, plan_type, true, false, thresholds) {
         parts.push(s);
     }
 
@@ -144,7 +152,10 @@ fn run_test_mode() -> Result<()> {
         .filter_map(|path| {
             fs::metadata(&path)
                 .ok()
-                .and_then(|m| m.modified().ok())
+                .and_then(|m| {
+                    m.modified()
+                        .ok()
+                })
                 .map(|mtime| (path, mtime))
         })
         .max_by_key(|(_, mtime)| *mtime);
@@ -156,12 +167,16 @@ fn run_test_mode() -> Result<()> {
 
     let hook_data = HookData {
         session_id: "test-session".to_string(),
-        transcript_path: transcript_path.to_string_lossy().to_string(),
+        transcript_path: transcript_path
+            .to_string_lossy()
+            .to_string(),
         model: types::ModelInfo {
             display_name: "Claude 3.5 Sonnet".to_string(),
         },
         workspace: Some(types::Workspace {
-            current_dir: std::env::current_dir()?.to_string_lossy().to_string(),
+            current_dir: std::env::current_dir()?
+                .to_string_lossy()
+                .to_string(),
         }),
     };
 
@@ -178,13 +193,20 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
 
     let plan_type = api_usage::get_plan_type();
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+    let thresholds = &statusline_config.thresholds;
     let api_result = api_usage::fetch_usage();
-    let api_usage = api_result.data().cloned();
+    let api_usage = api_result
+        .data()
+        .cloned();
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
     let block = find_active_block(&claude_paths, &pricing)?;
-    let burn_rate = calculate_burn_rate(&block, api_usage.as_ref())?;
+    let burn_rate = calculate_burn_rate(
+        &block,
+        api_usage.as_ref(),
+        thresholds.burn_rate_show_ratio(),
+    )?;
     let context_info = calculate_context_tokens(&hook_data.transcript_path)?;
     let update_available = claude_update::check_update_available();
 
@@ -195,7 +217,12 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
     for element in &statusline_config.enabled_elements {
         match element {
             StatusElement::Model => {
-                parts.push(format!("🤖{}", hook_data.model.display_name));
+                parts.push(format!(
+                    "🤖{}",
+                    hook_data
+                        .model
+                        .display_name
+                ));
             }
             StatusElement::BlockCost => {
                 parts.push(format!("💰{}", format_block_info(&block)));
@@ -217,15 +244,18 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
                     let enabled = &statusline_config.enabled_elements;
                     let show_rate = enabled.contains(&StatusElement::BurnRate);
                     let show_eta = enabled.contains(&StatusElement::BurnRateEta);
-                    if let Some(s) =
-                        format_burn_rate_component(&burn_rate, plan_type, show_rate, show_eta)
-                    {
+                    if let Some(s) = format_burn_rate_component(
+                        &burn_rate, plan_type, show_rate, show_eta, thresholds,
+                    ) {
                         parts.push(s);
                     }
                 }
             }
             StatusElement::Context => {
-                parts.push(format!("🧠{}", format_context(context_info.as_ref())));
+                parts.push(format!(
+                    "🧠{}",
+                    format_context(context_info.as_ref(), thresholds)
+                ));
             }
             StatusElement::ApiMetrics5h
             | StatusElement::ApiMetrics7d

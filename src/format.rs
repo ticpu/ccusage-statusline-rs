@@ -1,3 +1,4 @@
+use crate::config::Thresholds;
 use crate::types::{ApiUsageData, Block, BurnRate, ContextInfo, LimitType, PlanType};
 use chrono::{Duration, Utc};
 use num_format::{Locale, ToFormattedString};
@@ -38,10 +39,14 @@ pub fn format_time_remaining_5h(
         if let Some(reset_time) = api.five_hour_resets_at {
             (reset_time - now).num_seconds() as f64 / 3600.0
         } else {
-            block.hours_remaining.unwrap_or(0.0)
+            block
+                .hours_remaining
+                .unwrap_or(0.0)
         }
     } else {
-        block.hours_remaining.unwrap_or(0.0)
+        block
+            .hours_remaining
+            .unwrap_or(0.0)
     };
 
     Some(format_hours_remaining(remaining_hours))
@@ -135,6 +140,7 @@ pub fn format_burn_rate_component(
     plan_type: PlanType,
     show_rate: bool,
     show_eta: bool,
+    thresholds: &Thresholds,
 ) -> Option<String> {
     if !show_rate && !show_eta {
         return None;
@@ -143,16 +149,21 @@ pub fn format_burn_rate_component(
     let eta = show_eta && matches!(plan_type, PlanType::Subscription);
 
     if show_rate {
-        Some(format_rate_display(burn_rate, plan_type, eta))
+        Some(format_rate_display(burn_rate, plan_type, eta, thresholds))
     } else if eta {
-        format_eta_only(burn_rate)
+        format_eta_only(burn_rate, thresholds)
     } else {
         None
     }
 }
 
 /// Format burn rate percentage/cost with optional inline ETA
-fn format_rate_display(burn_rate: &BurnRate, plan_type: PlanType, show_eta: bool) -> String {
+fn format_rate_display(
+    burn_rate: &BurnRate,
+    plan_type: PlanType,
+    show_eta: bool,
+    thresholds: &Thresholds,
+) -> String {
     if burn_rate.is_at_limit {
         return "🔥limit".to_string();
     }
@@ -162,15 +173,21 @@ fn format_rate_display(burn_rate: &BurnRate, plan_type: PlanType, show_eta: bool
         PlanType::Subscription => format!("{}%", (burn_rate.ratio * 100.0).round() as i32),
     };
 
-    let colored_rate = if burn_rate.ratio >= 1.0 {
-        rate_str.red().to_string()
-    } else if burn_rate.ratio >= 0.8 {
-        rate_str.yellow().to_string()
+    let colored_rate = if burn_rate.ratio >= thresholds.burn_rate_danger_ratio() {
+        rate_str
+            .red()
+            .to_string()
+    } else if burn_rate.ratio >= thresholds.burn_rate_warning_ratio() {
+        rate_str
+            .yellow()
+            .to_string()
     } else {
-        rate_str.green().to_string()
+        rate_str
+            .green()
+            .to_string()
     };
 
-    let primary_eta = if show_eta && burn_rate.ratio >= 1.0 {
+    let primary_eta = if show_eta && burn_rate.ratio >= thresholds.burn_rate_danger_ratio() {
         if let Some(reset_in) = burn_rate.reset_in {
             let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.ratio;
             let eta_duration = Duration::seconds(eta_seconds as i64);
@@ -188,24 +205,25 @@ fn format_rate_display(burn_rate: &BurnRate, plan_type: PlanType, show_eta: bool
         LimitType::None => "",
     };
 
-    let seven_day_suffix =
-        if burn_rate.seven_day_ratio >= 1.0 && burn_rate.critical_limit != LimitType::SevenDay {
-            let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
-            let seven_day_eta = if show_eta {
-                if let Some(reset_in) = burn_rate.seven_day_reset_in {
-                    let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.seven_day_ratio;
-                    let eta_duration = Duration::seconds(eta_seconds as i64);
-                    format!("[⏱{}]", format_eta(eta_duration))
-                } else {
-                    String::new()
-                }
+    let seven_day_suffix = if burn_rate.seven_day_ratio >= thresholds.burn_rate_danger_ratio()
+        && burn_rate.critical_limit != LimitType::SevenDay
+    {
+        let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
+        let seven_day_eta = if show_eta {
+            if let Some(reset_in) = burn_rate.seven_day_reset_in {
+                let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.seven_day_ratio;
+                let eta_duration = Duration::seconds(eta_seconds as i64);
+                format!("[⏱{}]", format_eta(eta_duration))
             } else {
                 String::new()
-            };
-            format!(" {}{} 7d", format!("{}%", pct).red(), seven_day_eta)
+            }
         } else {
             String::new()
         };
+        format!(" {}{} 7d", format!("{}%", pct).red(), seven_day_eta)
+    } else {
+        String::new()
+    };
 
     format!(
         "🔥\u{200B}{}{}{}{}",
@@ -214,21 +232,29 @@ fn format_rate_display(burn_rate: &BurnRate, plan_type: PlanType, show_eta: bool
 }
 
 /// Format ETA-only mode: time remaining before hitting limit
-fn format_eta_only(burn_rate: &BurnRate) -> Option<String> {
+fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<String> {
     if burn_rate.is_at_limit {
         return Some("⏱\u{200B}limit".to_string());
     }
 
-    let primary = if burn_rate.ratio >= 1.0 {
-        burn_rate.reset_in.map(|reset_in| {
-            let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.ratio;
-            let eta_duration = Duration::seconds(eta_seconds as i64);
-            format_eta(eta_duration).red().to_string()
-        })
-    } else if burn_rate.ratio >= 0.8 {
+    let primary = if burn_rate.ratio >= thresholds.burn_rate_danger_ratio() {
         burn_rate
             .reset_in
-            .map(|reset_in| format_eta(reset_in).yellow().to_string())
+            .map(|reset_in| {
+                let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.ratio;
+                let eta_duration = Duration::seconds(eta_seconds as i64);
+                format_eta(eta_duration)
+                    .red()
+                    .to_string()
+            })
+    } else if burn_rate.ratio >= thresholds.burn_rate_warning_ratio() {
+        burn_rate
+            .reset_in
+            .map(|reset_in| {
+                format_eta(reset_in)
+                    .yellow()
+                    .to_string()
+            })
     } else {
         None
     };
@@ -239,16 +265,19 @@ fn format_eta_only(burn_rate: &BurnRate) -> Option<String> {
         LimitType::None => "",
     };
 
-    let secondary =
-        if burn_rate.seven_day_ratio >= 1.0 && burn_rate.critical_limit != LimitType::SevenDay {
-            burn_rate.seven_day_reset_in.map(|reset_in| {
+    let secondary = if burn_rate.seven_day_ratio >= thresholds.burn_rate_danger_ratio()
+        && burn_rate.critical_limit != LimitType::SevenDay
+    {
+        burn_rate
+            .seven_day_reset_in
+            .map(|reset_in| {
                 let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.seven_day_ratio;
                 let eta_duration = Duration::seconds(eta_seconds as i64);
                 format!(" {} 7d", format_eta(eta_duration).red())
             })
-        } else {
-            None
-        };
+    } else {
+        None
+    };
 
     if primary.is_none() && secondary.is_none() {
         return None;
@@ -263,15 +292,24 @@ fn format_eta_only(burn_rate: &BurnRate) -> Option<String> {
 }
 
 /// Format context information
-pub fn format_context(context: Option<&ContextInfo>) -> String {
+pub fn format_context(context: Option<&ContextInfo>, thresholds: &Thresholds) -> String {
     match context {
         Some(info) => {
-            let color = if info.percentage < 50 {
-                info.percentage.to_string().green().to_string()
-            } else if info.percentage < 70 {
-                info.percentage.to_string().yellow().to_string()
+            let color = if info.percentage < thresholds.context_warning {
+                info.percentage
+                    .to_string()
+                    .green()
+                    .to_string()
+            } else if info.percentage < thresholds.context_danger {
+                info.percentage
+                    .to_string()
+                    .yellow()
+                    .to_string()
             } else {
-                info.percentage.to_string().red().to_string()
+                info.percentage
+                    .to_string()
+                    .red()
+                    .to_string()
             };
 
             format!("{}({}%)", format_number(info.tokens), color)
@@ -334,7 +372,9 @@ pub fn format_directory(path: &str) -> String {
         path.to_string()
     };
 
-    formatted.green().to_string()
+    formatted
+        .green()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -398,10 +438,13 @@ mod tests {
             reset_in: None,
             seven_day_reset_in: None,
         };
-        let rate_api = format_burn_rate_component(&safe_burn, PlanType::Api, true, false).unwrap();
+        let t = default_thresholds();
+        let rate_api =
+            format_burn_rate_component(&safe_burn, PlanType::Api, true, false, &t).unwrap();
         assert!(rate_api.contains("$1.50/h"));
         let rate_sub =
-            format_burn_rate_component(&safe_burn, PlanType::Subscription, true, false).unwrap();
+            format_burn_rate_component(&safe_burn, PlanType::Subscription, true, false, &t)
+                .unwrap();
         assert!(rate_sub.contains("50%"));
 
         let warning_burn = BurnRate {
@@ -413,7 +456,8 @@ mod tests {
             reset_in: None,
             seven_day_reset_in: None,
         };
-        let warn = format_burn_rate_component(&warning_burn, PlanType::Api, true, false).unwrap();
+        let warn =
+            format_burn_rate_component(&warning_burn, PlanType::Api, true, false, &t).unwrap();
         assert!(warn.contains("$10.00/h"));
         assert!(warn.contains("5h"));
 
@@ -427,7 +471,8 @@ mod tests {
             seven_day_reset_in: None,
         };
         let danger =
-            format_burn_rate_component(&danger_burn, PlanType::Subscription, true, false).unwrap();
+            format_burn_rate_component(&danger_burn, PlanType::Subscription, true, false, &t)
+                .unwrap();
         assert!(danger.contains("140%"));
         assert!(danger.contains("5h"));
     }
@@ -443,8 +488,10 @@ mod tests {
             reset_in: None,
             seven_day_reset_in: None,
         };
+        let t = default_thresholds();
         let result =
-            format_burn_rate_component(&burn_with_7d, PlanType::Subscription, true, false).unwrap();
+            format_burn_rate_component(&burn_with_7d, PlanType::Subscription, true, false, &t)
+                .unwrap();
         assert!(result.contains("50%"));
         assert!(result.contains("5h"));
         assert!(result.contains("110%"));
@@ -460,11 +507,16 @@ mod tests {
             seven_day_reset_in: None,
         };
         let result =
-            format_burn_rate_component(&burn_7d_critical, PlanType::Subscription, true, false)
+            format_burn_rate_component(&burn_7d_critical, PlanType::Subscription, true, false, &t)
                 .unwrap();
         assert!(result.contains("110%"));
         assert!(result.contains(" 7d"));
-        assert_eq!(result.matches("7d").count(), 1);
+        assert_eq!(
+            result
+                .matches("7d")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -478,9 +530,15 @@ mod tests {
             reset_in: None,
             seven_day_reset_in: None,
         };
+        let t = default_thresholds();
         let result =
-            format_burn_rate_component(&burn, PlanType::Subscription, true, false).unwrap();
-        assert_eq!(result.matches('%').count(), 2);
+            format_burn_rate_component(&burn, PlanType::Subscription, true, false, &t).unwrap();
+        assert_eq!(
+            result
+                .matches('%')
+                .count(),
+            2
+        );
         assert!(result.contains(" 7d"));
         let stripped = strip_ansi_codes(&result);
         assert!(
@@ -714,7 +772,13 @@ mod tests {
             reset_in: Some(Duration::hours(3)),
             seven_day_reset_in: Some(Duration::hours(100)),
         };
-        let result = format_burn_rate_component(&burn, PlanType::Subscription, false, true);
+        let result = format_burn_rate_component(
+            &burn,
+            PlanType::Subscription,
+            false,
+            true,
+            &default_thresholds(),
+        );
         assert!(
             result.is_none(),
             "eta-only should return None when ratio < 0.8"
@@ -757,7 +821,16 @@ mod tests {
             reset_in: Some(Duration::hours(3)),
             seven_day_reset_in: None,
         };
-        assert!(format_burn_rate_component(&burn, PlanType::Subscription, false, false).is_none());
+        assert!(
+            format_burn_rate_component(
+                &burn,
+                PlanType::Subscription,
+                false,
+                false,
+                &default_thresholds()
+            )
+            .is_none()
+        );
     }
 
     // --- format_eta unit tests ---
@@ -782,21 +855,33 @@ mod tests {
         assert_eq!(format_eta(Duration::hours(23)), "23h");
     }
 
+    fn default_thresholds() -> Thresholds {
+        Thresholds::default()
+    }
+
     fn verbose(
         burn_rate: &BurnRate,
         plan_type: PlanType,
         show_rate: bool,
         show_eta: bool,
     ) -> String {
-        let result = format_burn_rate_component(burn_rate, plan_type, show_rate, show_eta)
-            .unwrap_or_default();
+        let result = format_burn_rate_component(
+            burn_rate,
+            plan_type,
+            show_rate,
+            show_eta,
+            &default_thresholds(),
+        )
+        .unwrap_or_default();
         eprintln!("  {}", result);
         result
     }
 
     fn strip_ansi_codes(s: &str) -> String {
         let mut result = String::new();
-        let mut chars = s.chars().peekable();
+        let mut chars = s
+            .chars()
+            .peekable();
         while let Some(c) = chars.next() {
             if c == '\x1b' {
                 while let Some(&next) = chars.peek() {

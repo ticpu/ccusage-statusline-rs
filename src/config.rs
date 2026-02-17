@@ -1,7 +1,8 @@
 use crate::paths::home_dir;
 use anyhow::Result;
-use inquire::MultiSelect;
+use inquire::{CustomType, MultiSelect, Select};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,8 +31,8 @@ impl StatusElement {
             Self::BlockCost => "💰 Block cost",
             Self::TimeRemaining5h => "🕑 Time remaining (5h)",
             Self::TimeRemaining7d => "📅 Time remaining (7d)",
-            Self::BurnRate => "🔥 Burn rate (shows >80%)",
-            Self::BurnRateEta => "⏱ Coding time remaining (shows >80%)",
+            Self::BurnRate => "🔥 Burn rate",
+            Self::BurnRateEta => "⏱ Coding time remaining",
             Self::Context => "🧠 Context",
             Self::ApiMetrics5h => "📊 API metrics (5h)",
             Self::ApiMetrics7d => "📊 API metrics (7d)",
@@ -49,10 +50,10 @@ impl StatusElement {
             Self::TimeRemaining5h => "Time until 5-hour billing block resets.",
             Self::TimeRemaining7d => "Time until 7-day billing window resets.",
             Self::BurnRate => {
-                "Usage rate as % of limit. Colors: green (<80%), yellow (80-100%), red (>100%). Shows which limit (5h/7d) is critical."
+                "Usage rate as % of limit. Color changes at warning/danger thresholds."
             }
             Self::BurnRateEta => {
-                "How much time you can continue coding at this rate. Shows time before hitting limit (red >100%) or time until reset (yellow 80-100%)."
+                "Time remaining before hitting limit. Visible above burn rate show threshold."
             }
             Self::Context => "Current context window token usage and percentage.",
             Self::ApiMetrics5h => "5-hour API utilization percentage from Claude API.",
@@ -87,9 +88,67 @@ impl StatusElement {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Thresholds {
+    #[serde(default = "default_burn_rate_show")]
+    pub burn_rate_show: u32,
+    #[serde(default = "default_burn_rate_warning")]
+    pub burn_rate_warning: u32,
+    #[serde(default = "default_burn_rate_danger")]
+    pub burn_rate_danger: u32,
+    #[serde(default = "default_context_warning")]
+    pub context_warning: u32,
+    #[serde(default = "default_context_danger")]
+    pub context_danger: u32,
+}
+
+fn default_burn_rate_show() -> u32 {
+    80
+}
+fn default_burn_rate_warning() -> u32 {
+    80
+}
+fn default_burn_rate_danger() -> u32 {
+    100
+}
+fn default_context_warning() -> u32 {
+    50
+}
+fn default_context_danger() -> u32 {
+    70
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Self {
+            burn_rate_show: default_burn_rate_show(),
+            burn_rate_warning: default_burn_rate_warning(),
+            burn_rate_danger: default_burn_rate_danger(),
+            context_warning: default_context_warning(),
+            context_danger: default_context_danger(),
+        }
+    }
+}
+
+impl Thresholds {
+    pub fn burn_rate_show_ratio(&self) -> f64 {
+        self.burn_rate_show as f64 / 100.0
+    }
+
+    pub fn burn_rate_warning_ratio(&self) -> f64 {
+        self.burn_rate_warning as f64 / 100.0
+    }
+
+    pub fn burn_rate_danger_ratio(&self) -> f64 {
+        self.burn_rate_danger as f64 / 100.0
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatuslineConfig {
     pub enabled_elements: Vec<StatusElement>,
+    #[serde(default)]
+    pub thresholds: Thresholds,
 }
 
 impl Default for StatuslineConfig {
@@ -106,6 +165,7 @@ impl Default for StatuslineConfig {
                 StatusElement::UpdateStable,
                 StatusElement::Directory,
             ],
+            thresholds: Thresholds::default(),
         }
     }
 }
@@ -140,57 +200,196 @@ impl StatuslineConfig {
     }
 }
 
+enum MainMenu {
+    Elements,
+    Thresholds,
+    Help,
+    SaveAndExit,
+}
+
+impl fmt::Display for MainMenu {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Elements => write!(f, "Elements       Enable/disable statusline elements"),
+            Self::Thresholds => {
+                write!(
+                    f,
+                    "Thresholds     Configure visibility and color thresholds"
+                )
+            }
+            Self::Help => write!(f, "Help           Show element descriptions"),
+            Self::SaveAndExit => write!(f, "Save & exit"),
+        }
+    }
+}
+
+enum ThresholdMenu {
+    BurnRateShow(u32),
+    BurnRateWarning(u32),
+    BurnRateDanger(u32),
+    ContextWarning(u32),
+    ContextDanger(u32),
+    Back,
+}
+
+impl fmt::Display for ThresholdMenu {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BurnRateShow(v) => {
+                write!(
+                    f,
+                    "Burn rate visibility    {v}%  (show burn rate above this)"
+                )
+            }
+            Self::BurnRateWarning(v) => {
+                write!(f, "Burn rate warning       {v}%  (yellow color threshold)")
+            }
+            Self::BurnRateDanger(v) => {
+                write!(f, "Burn rate danger       {v}%  (red color threshold)")
+            }
+            Self::ContextWarning(v) => {
+                write!(f, "Context warning         {v}%  (yellow color threshold)")
+            }
+            Self::ContextDanger(v) => {
+                write!(f, "Context danger          {v}%  (red color threshold)")
+            }
+            Self::Back => write!(f, "Back"),
+        }
+    }
+}
+
 pub fn run_config_menu() -> Result<()> {
-    println!("Configure statusline\n");
+    let mut config = StatuslineConfig::load().unwrap_or_default();
 
     loop {
-        let current_config = StatuslineConfig::load().unwrap_or_default();
-        let all_elements = StatusElement::all();
+        let menu = vec![
+            MainMenu::Elements,
+            MainMenu::Thresholds,
+            MainMenu::Help,
+            MainMenu::SaveAndExit,
+        ];
 
-        let mut options: Vec<String> = vec!["──── [?] View element descriptions ────".to_string()];
-        options.extend(all_elements.iter().map(|e| e.label().to_string()));
+        let choice = Select::new("Configure statusline:", menu).prompt()?;
 
-        let default_indices: Vec<usize> = all_elements
-            .iter()
-            .enumerate()
-            .filter(|(_, elem)| current_config.enabled_elements.contains(elem))
-            .map(|(i, _)| i + 1)
-            .collect();
-
-        let selected = MultiSelect::new("Select elements to display:", options)
-            .with_default(&default_indices)
-            .with_page_size(15)
-            .prompt()?;
-
-        if selected.contains(&"──── [?] View element descriptions ────".to_string())
-        {
-            println!();
-            for elem in StatusElement::all() {
-                println!("  {}  {}", elem.label(), elem.description());
+        match choice {
+            MainMenu::Elements => configure_elements(&mut config)?,
+            MainMenu::Thresholds => configure_thresholds(&mut config.thresholds)?,
+            MainMenu::Help => print_help(),
+            MainMenu::SaveAndExit => {
+                config.save()?;
+                println!(
+                    "Configuration saved to {}",
+                    StatuslineConfig::config_path()?.display()
+                );
+                break;
             }
-            println!();
-            continue;
         }
-
-        let enabled_elements: Vec<StatusElement> = selected
-            .iter()
-            .filter_map(|label| all_elements.iter().find(|e| e.label() == label).cloned())
-            .collect();
-
-        let new_config = StatuslineConfig { enabled_elements };
-        new_config.save()?;
-
-        println!(
-            "\nConfiguration saved to {}",
-            StatuslineConfig::config_path()?.display()
-        );
-        println!("\nEnabled elements:");
-        for elem in &new_config.enabled_elements {
-            println!("  {}", elem.label());
-        }
-
-        break;
     }
 
     Ok(())
+}
+
+fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
+    let all_elements = StatusElement::all();
+    let options: Vec<String> = all_elements
+        .iter()
+        .map(|e| {
+            e.label()
+                .to_string()
+        })
+        .collect();
+
+    let default_indices: Vec<usize> = all_elements
+        .iter()
+        .enumerate()
+        .filter(|(_, elem)| {
+            config
+                .enabled_elements
+                .contains(elem)
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    let selected = MultiSelect::new("Select elements to display:", options)
+        .with_default(&default_indices)
+        .with_page_size(15)
+        .prompt()?;
+
+    config.enabled_elements = selected
+        .iter()
+        .filter_map(|label| {
+            all_elements
+                .iter()
+                .find(|e| e.label() == label)
+                .cloned()
+        })
+        .collect();
+
+    Ok(())
+}
+
+fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
+    loop {
+        let menu = vec![
+            ThresholdMenu::BurnRateShow(thresholds.burn_rate_show),
+            ThresholdMenu::BurnRateWarning(thresholds.burn_rate_warning),
+            ThresholdMenu::BurnRateDanger(thresholds.burn_rate_danger),
+            ThresholdMenu::ContextWarning(thresholds.context_warning),
+            ThresholdMenu::ContextDanger(thresholds.context_danger),
+            ThresholdMenu::Back,
+        ];
+
+        let choice = Select::new("Thresholds:", menu).prompt()?;
+
+        match choice {
+            ThresholdMenu::BurnRateShow(_) => {
+                thresholds.burn_rate_show =
+                    prompt_threshold("Burn rate visibility % (0-100):", thresholds.burn_rate_show)?;
+            }
+            ThresholdMenu::BurnRateWarning(_) => {
+                thresholds.burn_rate_warning =
+                    prompt_threshold("Burn rate warning % (0-100):", thresholds.burn_rate_warning)?;
+            }
+            ThresholdMenu::BurnRateDanger(_) => {
+                thresholds.burn_rate_danger =
+                    prompt_threshold("Burn rate danger % (0-200):", thresholds.burn_rate_danger)?;
+            }
+            ThresholdMenu::ContextWarning(_) => {
+                thresholds.context_warning =
+                    prompt_threshold("Context warning % (0-100):", thresholds.context_warning)?;
+            }
+            ThresholdMenu::ContextDanger(_) => {
+                thresholds.context_danger =
+                    prompt_threshold("Context danger % (0-100):", thresholds.context_danger)?;
+            }
+            ThresholdMenu::Back => break,
+        }
+    }
+
+    Ok(())
+}
+
+fn prompt_threshold(message: &str, current: u32) -> Result<u32> {
+    let value = CustomType::<u32>::new(message)
+        .with_default(current)
+        .with_error_message("Enter a number between 0 and 200")
+        .with_validator(|val: &u32| {
+            if *val <= 200 {
+                Ok(inquire::validator::Validation::Valid)
+            } else {
+                Ok(inquire::validator::Validation::Invalid(
+                    "Must be between 0 and 200".into(),
+                ))
+            }
+        })
+        .prompt()?;
+    Ok(value)
+}
+
+fn print_help() {
+    println!();
+    for elem in StatusElement::all() {
+        println!("  {}  {}", elem.label(), elem.description());
+    }
+    println!();
 }
