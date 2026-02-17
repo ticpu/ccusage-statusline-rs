@@ -1,5 +1,6 @@
 use crate::paths::home_dir;
 use anyhow::Result;
+use inquire::ui::{RenderConfig, Styled};
 use inquire::{CustomType, MultiSelect, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -259,6 +260,10 @@ impl fmt::Display for ThresholdMenu {
 }
 
 pub fn run_config_menu() -> Result<()> {
+    inquire::set_global_render_config(
+        RenderConfig::default_colored().with_canceled_prompt_indicator(Styled::new("")),
+    );
+
     let mut config = StatuslineConfig::load().unwrap_or_default();
 
     loop {
