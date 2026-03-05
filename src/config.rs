@@ -145,11 +145,43 @@ impl Thresholds {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheSettings {
+    #[serde(default = "default_output_cache_secs")]
+    pub output_cache_secs: u64,
+    #[serde(default = "default_api_refresh_secs")]
+    pub api_refresh_secs: u64,
+    #[serde(default = "default_api_max_backoff_secs")]
+    pub api_max_backoff_secs: u64,
+}
+
+fn default_output_cache_secs() -> u64 {
+    300
+}
+fn default_api_refresh_secs() -> u64 {
+    300
+}
+fn default_api_max_backoff_secs() -> u64 {
+    1800
+}
+
+impl Default for CacheSettings {
+    fn default() -> Self {
+        Self {
+            output_cache_secs: default_output_cache_secs(),
+            api_refresh_secs: default_api_refresh_secs(),
+            api_max_backoff_secs: default_api_max_backoff_secs(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatuslineConfig {
     pub enabled_elements: Vec<StatusElement>,
     #[serde(default)]
     pub thresholds: Thresholds,
+    #[serde(default)]
+    pub cache: CacheSettings,
 }
 
 impl Default for StatuslineConfig {
@@ -167,6 +199,7 @@ impl Default for StatuslineConfig {
                 StatusElement::Directory,
             ],
             thresholds: Thresholds::default(),
+            cache: CacheSettings::default(),
         }
     }
 }

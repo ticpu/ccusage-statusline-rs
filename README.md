@@ -80,7 +80,24 @@ ccusage-statusline-rs config
 This opens an interactive menu where you can:
 - Enable/disable individual elements (Model, Block cost, Time remaining, etc.)
 - Choose update notification channel (stable/latest/off)
+- Configure burn rate and context color thresholds
 - Configuration persists in `~/.claude/ccusage-statusline-config.json`
+
+Cache timing can be tuned by editing the config file directly:
+
+```json
+{
+  "cache": {
+    "output_cache_secs": 300,
+    "api_fresh_secs": 300,
+    "api_stale_secs": 1800
+  }
+}
+```
+
+- `output_cache_secs` — How long to reuse cached statusline output (default: 300s)
+- `api_fresh_secs` — Minimum interval between API requests (default: 300s)
+- `api_stale_secs` — Show error after this long without a successful API response (default: 1800s)
 
 ### Manual Configuration (Not Recommended)
 

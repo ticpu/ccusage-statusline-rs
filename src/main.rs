@@ -84,12 +84,20 @@ fn run_piped_mode() -> Result<()> {
 
     let cache_path = cache_dir.join(format!("{}.lock", hook_data.session_id));
 
-    if let Some(cached) = try_get_cached(&cache_path, &hook_data.transcript_path)? {
+    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+
+    if let Some(cached) = try_get_cached(
+        &cache_path,
+        &hook_data.transcript_path,
+        statusline_config
+            .cache
+            .output_cache_secs,
+    )? {
         println!("{}", cached);
         return Ok(());
     }
 
-    let output = generate_statusline(&hook_data)?;
+    let output = generate_statusline(&hook_data, &statusline_config)?;
     println!("{}", output);
 
     update_cache(&cache_path, &hook_data.transcript_path, &output)?;
@@ -104,7 +112,7 @@ fn run_interactive_mode() -> Result<()> {
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
     let thresholds = &statusline_config.thresholds;
     let plan_type = api_usage::get_plan_type();
-    let api_result = api_usage::fetch_usage();
+    let api_result = api_usage::fetch_usage(&statusline_config.cache);
     let api_usage = api_result
         .data()
         .cloned();
@@ -130,8 +138,8 @@ fn run_interactive_mode() -> Result<()> {
         parts.push(s);
     }
 
-    if api_result.is_stale() {
-        parts.push("📊(api error)".to_string());
+    if let Some(label) = api_result.error_label() {
+        parts.push(format!("📊({})", label));
     } else if let Some(api) = format_api_usage_5h(api_usage.as_ref()) {
         parts.push(format!("📊{}", api));
         if let Some(api) = format_api_usage_7d(api_usage.as_ref()) {
@@ -180,21 +188,24 @@ fn run_test_mode() -> Result<()> {
         }),
     };
 
-    let output = generate_statusline(&hook_data)?;
+    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+    let output = generate_statusline(&hook_data, &statusline_config)?;
     println!("{}", output);
 
     Ok(())
 }
 
 /// Generate statusline output
-fn generate_statusline(hook_data: &HookData) -> Result<String> {
+fn generate_statusline(
+    hook_data: &HookData,
+    statusline_config: &config::StatuslineConfig,
+) -> Result<String> {
     let cache_dir = get_cache_dir()?;
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
     let plan_type = api_usage::get_plan_type();
-    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
     let thresholds = &statusline_config.thresholds;
-    let api_result = api_usage::fetch_usage();
+    let api_result = api_usage::fetch_usage(&statusline_config.cache);
     let api_usage = api_result
         .data()
         .cloned();
@@ -262,8 +273,8 @@ fn generate_statusline(hook_data: &HookData) -> Result<String> {
             | StatusElement::ApiMetricsSonnet => {
                 if !api_metrics_emitted {
                     api_metrics_emitted = true;
-                    if api_result.is_stale() {
-                        parts.push("📊(api error)".to_string());
+                    if let Some(label) = api_result.error_label() {
+                        parts.push(format!("📊({})", label));
                     } else {
                         let enabled = &statusline_config.enabled_elements;
                         let mut api_parts = Vec::new();

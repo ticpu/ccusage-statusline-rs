@@ -14,7 +14,11 @@ pub fn get_cache_dir() -> Result<PathBuf> {
 }
 
 /// Try to get cached output if valid
-pub fn try_get_cached(cache_path: &Path, transcript_path: &str) -> Result<Option<String>> {
+pub fn try_get_cached(
+    cache_path: &Path,
+    transcript_path: &str,
+    ttl_secs: u64,
+) -> Result<Option<String>> {
     if !cache_path.exists() {
         return Ok(None);
     }
@@ -42,8 +46,7 @@ pub fn try_get_cached(cache_path: &Path, transcript_path: &str) -> Result<Option
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
 
-    // Cache expires after 30 seconds (default refresh interval)
-    let is_expired = now - semaphore.last_update_time >= 30;
+    let is_expired = now - semaphore.last_update_time >= ttl_secs;
 
     // Check if transcript file was modified
     let current_mtime = get_file_mtime(transcript_path)?;

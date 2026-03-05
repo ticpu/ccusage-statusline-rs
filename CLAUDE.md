@@ -75,7 +75,7 @@ src/
 - Target: <20ms average in release mode (STRICTLY ENFORCED by CI)
 - This is 15x faster than Node.js warm (120ms)
 - Failing the performance test is NOT acceptable - investigate and fix before committing
-- Caching: Output cache (30s), pricing cache (24h), API cache (30s)
+- Caching: Output cache (5min), pricing cache (24h), API cache (5min fresh / 30min stale)
 - Early returns: Skip processing if cache hit
 
 **Install/Uninstall Commands**:
