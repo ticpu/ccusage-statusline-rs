@@ -25,6 +25,16 @@ pub enum StatusElement {
     Directory,
 }
 
+const API_DEPENDENT_ELEMENTS: &[StatusElement] = &[
+    StatusElement::TimeRemaining5h,
+    StatusElement::TimeRemaining7d,
+    StatusElement::BurnRate,
+    StatusElement::BurnRateEta,
+    StatusElement::ApiMetrics5h,
+    StatusElement::ApiMetrics7d,
+    StatusElement::ApiMetricsSonnet,
+];
+
 impl StatusElement {
     fn label(&self) -> &'static str {
         match self {
@@ -205,6 +215,12 @@ impl Default for StatuslineConfig {
 }
 
 impl StatuslineConfig {
+    pub fn needs_api(&self) -> bool {
+        self.enabled_elements
+            .iter()
+            .any(|e| API_DEPENDENT_ELEMENTS.contains(e))
+    }
+
     fn config_path() -> Result<PathBuf> {
         Ok(home_dir()?.join(".claude/ccusage-statusline-config.json"))
     }

@@ -112,7 +112,11 @@ fn run_interactive_mode() -> Result<()> {
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
     let thresholds = &statusline_config.thresholds;
     let plan_type = api_usage::get_plan_type();
-    let api_result = api_usage::fetch_usage(&statusline_config.cache);
+    let api_result = if statusline_config.needs_api() {
+        api_usage::fetch_usage(&statusline_config.cache)
+    } else {
+        api_usage::ApiUsageResult::Unavailable
+    };
     let api_usage = api_result
         .data()
         .cloned();
@@ -205,7 +209,11 @@ fn generate_statusline(
 
     let plan_type = api_usage::get_plan_type();
     let thresholds = &statusline_config.thresholds;
-    let api_result = api_usage::fetch_usage(&statusline_config.cache);
+    let api_result = if statusline_config.needs_api() {
+        api_usage::fetch_usage(&statusline_config.cache)
+    } else {
+        api_usage::ApiUsageResult::Unavailable
+    };
     let api_usage = api_result
         .data()
         .cloned();
