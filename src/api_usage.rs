@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
-use std::io::{ErrorKind, Read};
+use std::fs::{self, File, FileTimes, OpenOptions};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::cache::get_cache_dir;
 use crate::paths::home_dir;
@@ -177,22 +177,34 @@ fn fetch_or_use_cache(file: &mut File, cache_path: &PathBuf) -> Result<ApiUsageD
         .unwrap_or(Duration::from_secs(CACHE_TTL_SECS + 1));
 
     if age < Duration::from_secs(CACHE_TTL_SECS) {
-        // Cache is fresh - read it
-        if let Ok(data) = read_cache_from_file(file) {
-            return Ok(data);
-        }
+        // Cache is fresh - return data if valid, or skip API (recent attempt failed)
+        return read_cache_from_file(file);
     }
 
     // Cache is stale or invalid - fetch fresh data
-    let api_response = fetch_api_response()?;
-
-    // Atomic write: temp file + rename (so shared lock readers always see valid data)
-    let temp_path = cache_path.with_extension("tmp");
-    let json = serde_json::to_string(&api_response)?;
-    fs::write(&temp_path, json)?;
-    fs::rename(&temp_path, cache_path)?;
-
-    Ok(parse_api_response(api_response))
+    match fetch_api_response() {
+        Ok(api_response) => {
+            // Atomic write: temp file + rename (so shared lock readers always see valid data)
+            let temp_path = cache_path.with_extension("tmp");
+            let json = serde_json::to_string(&api_response)?;
+            fs::write(&temp_path, json)?;
+            fs::rename(&temp_path, cache_path)?;
+            Ok(parse_api_response(api_response))
+        }
+        Err(fetch_err) => {
+            // Touch mtime to prevent retrying the API within the TTL window
+            file.set_times(FileTimes::new().set_modified(SystemTime::now()))
+                .ok();
+            // Fall back to stale cache if not too old
+            if age < Duration::from_secs(MAX_CACHE_AGE_SECS) {
+                file.seek(SeekFrom::Start(0))?;
+                if let Ok(data) = read_cache_from_file(file) {
+                    return Ok(data);
+                }
+            }
+            Err(fetch_err)
+        }
+    }
 }
 
 fn read_cache_from_file(file: &mut File) -> Result<ApiUsageData> {
