@@ -10,16 +10,40 @@ pub struct HookData {
     pub model: ModelInfo,
     #[serde(default)]
     pub workspace: Option<Workspace>,
+    #[serde(default)]
+    pub context_window: Option<ContextWindowData>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ModelInfo {
+    #[serde(default)]
+    pub id: Option<String>,
     pub display_name: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Workspace {
     pub current_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContextWindowData {
+    #[serde(default)]
+    pub used_percentage: Option<f64>,
+    #[serde(default)]
+    pub total_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub current_usage: Option<ContextUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContextUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
 }
 
 /// Usage data entry from JSONL

@@ -1,7 +1,6 @@
 use crate::config::Thresholds;
 use crate::types::{ApiUsageData, Block, BurnRate, ContextInfo, LimitType, PlanType};
 use chrono::{Duration, Utc};
-use num_format::{Locale, ToFormattedString};
 use owo_colors::OwoColorize;
 
 /// Format block cost
@@ -312,15 +311,10 @@ pub fn format_context(context: Option<&ContextInfo>, thresholds: &Thresholds) ->
                     .to_string()
             };
 
-            format!("{}({}%)", format_number(info.tokens), color)
+            format!("{}k({}%)", info.tokens / 1000, color)
         }
         None => "N/A".to_string(),
     }
-}
-
-/// Format number with locale-based thousand separators
-pub fn format_number(n: u64) -> String {
-    n.to_formatted_string(&Locale::en)
 }
 
 /// Format currency with locale-based formatting

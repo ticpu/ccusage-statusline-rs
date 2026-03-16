@@ -344,7 +344,10 @@ pub fn run_config_menu() -> Result<()> {
                     "\nConfiguration saved to {}",
                     StatuslineConfig::config_path()?.display()
                 );
-                println!("  Emojis: {}", if config.show_emojis { "on" } else { "off" });
+                println!(
+                    "  Emojis: {}",
+                    if config.show_emojis { "on" } else { "off" }
+                );
                 break;
             }
         }
@@ -358,14 +361,21 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
     let emojis_label = "😀 Emojis";
     let mut options: Vec<String> = all_elements
         .iter()
-        .map(|e| e.label().to_string())
+        .map(|e| {
+            e.label()
+                .to_string()
+        })
         .collect();
     options.push(emojis_label.to_string());
 
     let mut default_indices: Vec<usize> = all_elements
         .iter()
         .enumerate()
-        .filter(|(_, elem)| config.enabled_elements.contains(elem))
+        .filter(|(_, elem)| {
+            config
+                .enabled_elements
+                .contains(elem)
+        })
         .map(|(i, _)| i)
         .collect();
     if config.show_emojis {
@@ -380,10 +390,17 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
         return Ok(());
     };
 
-    config.show_emojis = selected.iter().any(|label| label == emojis_label);
+    config.show_emojis = selected
+        .iter()
+        .any(|label| label == emojis_label);
     config.enabled_elements = selected
         .iter()
-        .filter_map(|label| all_elements.iter().find(|e| e.label() == label).cloned())
+        .filter_map(|label| {
+            all_elements
+                .iter()
+                .find(|e| e.label() == label)
+                .cloned()
+        })
         .collect();
 
     Ok(())

@@ -18,7 +18,7 @@ use burn_rate::calculate_burn_rate;
 use cache::{get_cache_dir, try_get_cached, update_cache};
 use clap::{Parser, Subcommand};
 use config::StatusElement;
-use context::calculate_context_tokens;
+use context::calculate_context;
 use format::*;
 use paths::{find_claude_paths, iter_jsonl_files};
 use pricing::PricingFetcher;
@@ -188,6 +188,7 @@ fn run_test_mode() -> Result<()> {
             .to_string_lossy()
             .to_string(),
         model: types::ModelInfo {
+            id: None,
             display_name: "Claude 3.5 Sonnet".to_string(),
         },
         workspace: Some(types::Workspace {
@@ -195,6 +196,7 @@ fn run_test_mode() -> Result<()> {
                 .to_string_lossy()
                 .to_string(),
         }),
+        context_window: None,
     };
 
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
@@ -231,7 +233,7 @@ fn generate_statusline(
         api_usage.as_ref(),
         thresholds.burn_rate_show_ratio(),
     )?;
-    let context_info = calculate_context_tokens(&hook_data.transcript_path)?;
+    let context_info = calculate_context(hook_data)?;
     let update_available = claude_update::check_update_available();
 
     let mut parts = Vec::new();
@@ -241,12 +243,11 @@ fn generate_statusline(
     for element in &statusline_config.enabled_elements {
         match element {
             StatusElement::Model => {
-                parts.push(format!(
-                    "🤖{}",
-                    hook_data
-                        .model
-                        .display_name
-                ));
+                let name = hook_data
+                    .model
+                    .display_name
+                    .replace(" context)", ")");
+                parts.push(format!("🤖{}", name));
             }
             StatusElement::BlockCost => {
                 parts.push(format!("💰{}", format_block_info(&block)));
