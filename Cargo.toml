@@ -1,6 +1,6 @@
 [package]
 name = "ccusage-statusline-rs"
-version = "1.9.0"
+version = "1.9.1"
 edition = "2024"
 
 [profile.release]
@@ -17,7 +17,8 @@ owo-colors = "4.1"
 anyhow = "1.0"
 fs2 = "0.4"
 libc = "0.2"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 clap = { version = "4.5", features = ["derive"] }
 semver = "1.0"
 inquire = "0.9"

@@ -48,6 +48,10 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -349,6 +353,7 @@ mod tests {
 
     #[test]
     fn test_performance_under_20ms() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let _ = run_interactive_mode();
 
         let iterations = 10;
