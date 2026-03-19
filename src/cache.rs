@@ -91,6 +91,50 @@ pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> R
     Ok(())
 }
 
+/// Remove .lock files whose mtime exceeds `ttl_secs`. Runs at most once
+/// per `ttl_secs`, gated by the mtime of a marker file.
+pub fn cleanup_stale_locks(cache_dir: &Path, ttl_secs: u64) {
+    let marker = cache_dir.join("last-cleanup");
+    if let Ok(mtime) = fs::metadata(&marker).and_then(|m| m.modified())
+        && let Ok(age) = mtime.elapsed()
+        && age.as_secs() < ttl_secs
+    {
+        return;
+    }
+
+    // Touch the marker first so concurrent invocations skip cleanup
+    let _ = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&marker);
+
+    let entries = match fs::read_dir(cache_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            != Some("lock")
+        {
+            continue;
+        }
+        let mtime = match fs::metadata(&path).and_then(|m| m.modified()) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if let Ok(age) = mtime.elapsed()
+            && age.as_secs() > ttl_secs
+        {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
 /// Get file modification time in seconds
 pub fn get_file_mtime(path: &str) -> Result<u64> {
     let metadata = fs::metadata(path)?;

@@ -15,7 +15,7 @@ mod types;
 use anyhow::{Context, Result};
 use blocks::find_active_block;
 use burn_rate::calculate_burn_rate;
-use cache::{get_cache_dir, try_get_cached, update_cache};
+use cache::{cleanup_stale_locks, get_cache_dir, try_get_cached, update_cache};
 use clap::{Parser, Subcommand};
 use config::StatusElement;
 use context::calculate_context;
@@ -89,6 +89,12 @@ fn run_piped_mode() -> Result<()> {
     let cache_path = cache_dir.join(format!("{}.lock", hook_data.session_id));
 
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+    cleanup_stale_locks(
+        &cache_dir,
+        statusline_config
+            .cache
+            .output_cache_secs,
+    );
 
     if let Some(cached) = try_get_cached(
         &cache_path,
