@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::cache::get_cache_dir;
-use crate::paths::home_dir;
+use crate::paths::claude_config_dir;
 use crate::types::{ApiUsageData, PlanType};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,8 +88,7 @@ fn get_api_cache_path() -> Result<PathBuf> {
 }
 
 fn read_credentials() -> Result<ClaudeCredentials> {
-    let home = home_dir()?;
-    let creds_path = home.join(".claude/.credentials.json");
+    let creds_path = claude_config_dir()?.join(".credentials.json");
 
     let content = fs::read_to_string(&creds_path)
         .context("Failed to read credentials - ensure you're logged in with Claude Code")?;

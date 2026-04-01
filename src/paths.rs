@@ -8,18 +8,33 @@ pub fn home_dir() -> Result<PathBuf> {
         .context("HOME not set")
 }
 
+pub fn claude_config_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        Ok(PathBuf::from(dir))
+    } else {
+        Ok(home_dir()?.join(".claude"))
+    }
+}
+
 pub fn find_claude_paths() -> Result<Vec<PathBuf>> {
-    let home = home_dir()?;
     let mut paths = Vec::new();
 
-    let old_path = home.join(".claude/projects");
-    let new_path = home.join(".config/claude/projects");
+    if std::env::var("CLAUDE_CONFIG_DIR").is_ok() {
+        let config_path = claude_config_dir()?.join("projects");
+        if config_path.exists() {
+            paths.push(config_path);
+        }
+    } else {
+        let home = home_dir()?;
+        let old_path = home.join(".claude/projects");
+        let new_path = home.join(".config/claude/projects");
 
-    if old_path.exists() {
-        paths.push(old_path);
-    }
-    if new_path.exists() {
-        paths.push(new_path);
+        if old_path.exists() {
+            paths.push(old_path);
+        }
+        if new_path.exists() {
+            paths.push(new_path);
+        }
     }
 
     if paths.is_empty() {

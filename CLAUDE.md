@@ -132,3 +132,4 @@ cargo test --release --message-format=short
 
 - Version is ONLY in Cargo.toml, never edit PKGBUILD/Makefile versions
 - DO NOT push tags until CI passes on master
+- When testing with `env -u CLAUDE_CONFIG_DIR`, do not chain with `&&` — the Claude Code sandbox requires separate tool calls for `env` commands

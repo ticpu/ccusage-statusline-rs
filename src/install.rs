@@ -1,4 +1,4 @@
-use crate::paths::home_dir;
+use crate::paths::claude_config_dir;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 fn get_settings_path() -> Result<PathBuf> {
-    Ok(home_dir()?.join(".claude/settings.json"))
+    Ok(claude_config_dir()?.join("settings.json"))
 }
 
 /// Prompt user for yes/no confirmation
@@ -33,7 +33,8 @@ pub fn install() -> Result<()> {
     } else {
         // Create parent directory if needed
         if let Some(parent) = settings_path.parent() {
-            fs::create_dir_all(parent).context("Failed to create ~/.claude directory")?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
         }
         println!("Creating new settings file: {}", settings_path.display());
         json!({})

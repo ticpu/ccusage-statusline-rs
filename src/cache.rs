@@ -6,11 +6,19 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-/// Get cache directory from XDG_RUNTIME_DIR
+/// Get cache directory from XDG_RUNTIME_DIR, scoped per config dir
 pub fn get_cache_dir() -> Result<PathBuf> {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
-    Ok(PathBuf::from(runtime_dir).join("ccusage-statusline-rs"))
+    let config_dir = crate::paths::claude_config_dir()?;
+    let config_name = config_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".claude")
+        .trim_start_matches('.');
+    Ok(PathBuf::from(runtime_dir)
+        .join("ccusage-statusline-rs")
+        .join(config_name))
 }
 
 /// Try to get cached output if valid

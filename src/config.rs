@@ -1,4 +1,4 @@
-use crate::paths::home_dir;
+use crate::paths::claude_config_dir;
 use anyhow::Result;
 use inquire::ui::{RenderConfig, Styled};
 use inquire::{CustomType, MultiSelect, Select};
@@ -229,7 +229,7 @@ impl StatuslineConfig {
     }
 
     fn config_path() -> Result<PathBuf> {
-        Ok(home_dir()?.join(".claude/ccusage-statusline-config.json"))
+        Ok(claude_config_dir()?.join("ccusage-statusline-config.json"))
     }
 
     pub fn load() -> Result<Self> {

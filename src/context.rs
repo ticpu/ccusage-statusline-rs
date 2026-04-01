@@ -1,5 +1,5 @@
 use crate::{
-    paths::home_dir,
+    paths::claude_config_dir,
     types::{ClaudeConfig, ContextInfo, ContextWindowData, HookData, UsageData},
 };
 use anyhow::Result;
@@ -57,12 +57,12 @@ fn get_context_limit(model_id: Option<&str>) -> u64 {
         return EXTENDED_CONTEXT_LIMIT;
     }
 
-    let home = match home_dir() {
-        Ok(h) => h,
+    let config_dir = match claude_config_dir() {
+        Ok(d) => d,
         Err(_) => return COMPACTED_CONTEXT_LIMIT,
     };
 
-    let config_path = home.join(".claude.json");
+    let config_path = config_dir.join(".claude.json");
 
     match fs::read_to_string(&config_path) {
         Ok(content) => match serde_json::from_str::<ClaudeConfig>(&content) {

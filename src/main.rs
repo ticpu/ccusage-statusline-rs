@@ -37,9 +37,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Install statusLine configuration to ~/.claude/settings.json
+    /// Install statusLine configuration (respects CLAUDE_CONFIG_DIR)
     Install,
-    /// Remove statusLine configuration from ~/.claude/settings.json
+    /// Remove statusLine configuration (respects CLAUDE_CONFIG_DIR)
     Uninstall,
     /// Test the statusline with most recent transcript
     Test,
