@@ -1,4 +1,4 @@
-use crate::paths::iter_jsonl_files;
+use crate::paths::iter_jsonl_files_since;
 use crate::pricing::PricingFetcher;
 use crate::types::{Block, UsageData};
 use anyhow::Result;
@@ -151,7 +151,7 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
     let file_cutoff_time = now - Duration::hours(FILE_LOOKBACK_HOURS);
     let file_cutoff_timestamp = file_cutoff_time.timestamp();
 
-    for session_file in iter_jsonl_files(claude_paths)? {
+    for session_file in iter_jsonl_files_since(claude_paths, Some(file_cutoff_timestamp))? {
         // Skip files not modified within lookback window
         if let Ok(metadata) = fs::metadata(&session_file)
             && let Ok(modified) = metadata.modified()

@@ -45,15 +45,42 @@ pub fn find_claude_paths() -> Result<Vec<PathBuf>> {
 }
 
 pub fn iter_jsonl_files(claude_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    iter_jsonl_files_since(claude_paths, None)
+}
+
+/// Like `iter_jsonl_files` but skips project directories whose mtime is older
+/// than `min_mtime_secs` (Unix timestamp). Avoids `read_dir` on stale dirs,
+/// which is the main source of latency when many projects exist.
+pub fn iter_jsonl_files_since(
+    claude_paths: &[PathBuf],
+    min_mtime_secs: Option<i64>,
+) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     for base_path in claude_paths {
         for project_entry in fs::read_dir(base_path)
             .with_context(|| format!("Failed to read directory: {}", base_path.display()))?
         {
-            let project_path = project_entry?.path();
+            let project_entry = project_entry?;
+            let project_path = project_entry.path();
             if !project_path.is_dir() {
                 continue;
+            }
+
+            if let Some(cutoff) = min_mtime_secs {
+                let mtime = project_entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .ok()
+                    })
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(i64::MAX);
+                if mtime < cutoff {
+                    continue;
+                }
             }
 
             for session_entry in fs::read_dir(&project_path)? {
