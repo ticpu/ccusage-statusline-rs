@@ -24,18 +24,20 @@ fn prompt_yes_no(prompt: &str) -> Result<bool> {
 
 /// Install statusLine configuration
 pub fn install() -> Result<()> {
-    let settings_path = get_settings_path()?;
+    let config_dir = claude_config_dir()?;
+    if !config_dir.exists() {
+        anyhow::bail!(
+            "Config directory {} does not exist — run Claude Code once first",
+            config_dir.display()
+        );
+    }
 
-    // Create settings file if it doesn't exist
+    let settings_path = config_dir.join("settings.json");
+
     let mut settings: Value = if settings_path.exists() {
         let content = fs::read_to_string(&settings_path).context("Failed to read settings file")?;
         serde_json::from_str(&content).context("Failed to parse settings.json (invalid JSON)")?
     } else {
-        // Create parent directory if needed
-        if let Some(parent) = settings_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
-        }
         println!("Creating new settings file: {}", settings_path.display());
         json!({})
     };
