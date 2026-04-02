@@ -23,6 +23,7 @@ High-performance statusline for Claude Code that displays real-time usage metric
 - **Deduplication** - Prevents double-counting duplicate JSONL entries
 - **Burn rate monitoring** - Real-time cost per hour with visual indicators
 - **Coding time remaining** - How much time you can continue coding at the current rate
+- **Multi-account support** - `CLAUDE_CONFIG_DIR` env var switches between accounts (e.g. work vs personal)
 - **Auto-install** - Creates ~/.claude/settings.json if missing during install
 
 ## Inspiration
@@ -82,6 +83,17 @@ This opens an interactive menu where you can:
 - Choose update notification channel (stable/latest/off)
 - Configure burn rate and context color thresholds
 - Configuration persists in `~/.claude/ccusage-statusline-config.json`
+
+### Multi-Account Usage
+
+If you use multiple Claude accounts, set `CLAUDE_CONFIG_DIR` to point to the alternate config directory:
+
+```bash
+export CLAUDE_CONFIG_DIR=~/.claude-personal
+ccusage-statusline-rs install
+```
+
+The binary resolves all paths (credentials, settings, projects, runtime cache) relative to `CLAUDE_CONFIG_DIR`. Each account gets an isolated cache scope so they don't interfere. When `CLAUDE_CONFIG_DIR` is not set, it falls back to `~/.claude`.
 
 Cache timing can be tuned by editing the config file directly:
 
