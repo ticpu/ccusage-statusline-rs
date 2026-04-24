@@ -57,9 +57,17 @@ pub fn install() -> Result<()> {
     // Get the current binary path
     let binary_path =
         std::env::current_exe().context("Failed to determine current executable path")?;
-    let binary_path_str = binary_path
+    let raw = binary_path
         .to_str()
         .context("Binary path contains invalid UTF-8")?;
+    // Claude Code invokes statusLine commands via Git Bash on Windows, so backslashes
+    // in the path would be interpreted as escape characters. Use forward slashes instead.
+    let binary_path_str: std::borrow::Cow<str> = if cfg!(windows) {
+        raw.replace('\\', "/")
+            .into()
+    } else {
+        raw.into()
+    };
 
     // Create statusLine configuration
     let status_line_config = json!({
