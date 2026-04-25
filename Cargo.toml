@@ -23,6 +23,7 @@ semver = "1.0"
 inquire = "0.9"
 dunce = "1.0"
 path-slash = "0.2"
+which = "8"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }

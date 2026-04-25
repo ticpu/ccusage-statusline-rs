@@ -16,29 +16,7 @@ struct VersionCache {
 
 /// Get Claude binary path from PATH
 fn get_claude_binary_path() -> Option<PathBuf> {
-    let locator = if cfg!(windows) { "where" } else { "which" };
-    let output = Command::new(locator)
-        .arg("claude")
-        .output()
-        .ok()?;
-
-    if !output
-        .status
-        .success()
-    {
-        return None;
-    }
-
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    // `where` can return multiple lines; take the first.
-    let first = stdout
-        .lines()
-        .next()?
-        .trim();
-    if first.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(first))
+    which::which("claude").ok()
 }
 
 /// Get binary modification time as unix timestamp
