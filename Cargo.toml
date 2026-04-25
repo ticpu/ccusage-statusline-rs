@@ -24,3 +24,6 @@ inquire = "0.9"
 dunce = "1.0"
 path-slash = "0.2"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
