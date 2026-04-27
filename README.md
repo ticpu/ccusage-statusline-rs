@@ -18,7 +18,7 @@ High-performance statusline for Claude Code that displays real-time usage metric
 - **Interactive mode** - Works as standalone tool or piped statusline
 - **OAuth authentication** - Uses Claude Code's native OAuth tokens from ~/.claude/.credentials.json
 - **Accurate cost tracking** - Fetches daily pricing from LiteLLM, supports tiered pricing
-- **Smart caching** - XDG_RUNTIME_DIR-based caching with 24-hour pricing cache
+- **Smart caching** - XDG_RUNTIME_DIR-based caching (falls back to `$TEMP` on Windows) with 24-hour pricing cache
 - **5-hour block tracking** - Matches Claude's billing cycles exactly
 - **Deduplication** - Prevents double-counting duplicate JSONL entries
 - **Burn rate monitoring** - Real-time cost per hour with visual indicators
@@ -32,13 +32,27 @@ This project is a Rust reimplementation of the statusline feature from [ccusage]
 
 ## Installation
 
-### Quick Install
+### Linux / macOS
 
 ```bash
 cargo build --release
 sudo cp target/release/ccusage-statusline-rs /usr/local/bin/
 ccusage-statusline-rs install
 ```
+
+### Windows
+
+```powershell
+cargo build --release
+Copy-Item target\release\ccusage-statusline-rs.exe "$env:USERPROFILE\.local\bin\"
+ccusage-statusline-rs install
+```
+
+> **Note:** on Windows, Claude Code invokes the statusLine command through Git Bash. The
+> `install` command handles this automatically by writing the path with forward slashes.
+> If you configure the path manually, use forward slashes (`C:/Users/...`) rather than
+> backslashes, otherwise Git Bash will silently misinterpret the path and the status line
+> will not appear.
 
 The `install` command will automatically configure `~/.claude/settings.json` for you.
 
@@ -48,7 +62,7 @@ The `install` command will automatically configure `~/.claude/settings.json` for
 cargo build --release
 ```
 
-The binary will be at `target/release/ccusage-statusline-rs`.
+The binary will be at `target/release/ccusage-statusline-rs` (`.exe` on Windows).
 
 ## Usage
 
@@ -124,7 +138,9 @@ If you prefer to manually configure, add to your `~/.claude/settings.json`:
 }
 ```
 
-Replace `/path/to/` with the actual path to the binary.
+Replace `/path/to/` with the actual path to the binary. On Windows, use forward slashes
+(`C:/Users/yourname/.local/bin/ccusage-statusline-rs.exe`) — backslashes will not work
+because Claude Code invokes the command through Git Bash.
 
 ## Performance
 

@@ -363,16 +363,16 @@ pub fn strip_emojis(s: &str) -> String {
 
 /// Format directory path with home replacement and color
 pub fn format_directory(path: &str) -> String {
-    use std::env;
+    let home = crate::paths::home_dir()
+        .ok()
+        .and_then(|p| {
+            p.to_str()
+                .map(String::from)
+        });
 
-    let formatted = if let Ok(home) = env::var("HOME") {
-        if path.starts_with(&home) {
-            path.replacen(&home, "~", 1)
-        } else {
-            path.to_string()
-        }
-    } else {
-        path.to_string()
+    let formatted = match home {
+        Some(h) if path.starts_with(&h) => path.replacen(&h, "~", 1),
+        _ => path.to_string(),
     };
 
     formatted

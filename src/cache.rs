@@ -6,17 +6,29 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-/// Get cache directory from XDG_RUNTIME_DIR, scoped per config dir
+/// Get cache directory from XDG_RUNTIME_DIR, scoped per config dir.
+/// Fallback on Unix is per-user `/run/user/<uid>` (mode 0700, tmpfs); on
+/// non-Unix targets it is `std::env::temp_dir()`.
 pub fn get_cache_dir() -> Result<PathBuf> {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            #[cfg(unix)]
+            {
+                PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()))
+            }
+            #[cfg(not(unix))]
+            {
+                std::env::temp_dir()
+            }
+        });
     let config_dir = crate::paths::claude_config_dir()?;
     let config_name = config_dir
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(".claude")
         .trim_start_matches('.');
-    Ok(PathBuf::from(runtime_dir)
+    Ok(runtime_dir
         .join("ccusage-statusline-rs")
         .join(config_name))
 }

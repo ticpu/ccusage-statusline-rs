@@ -1,5 +1,6 @@
 use crate::paths::claude_config_dir;
 use anyhow::{Context, Result};
+use path_slash::PathExt;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Write};
@@ -54,12 +55,22 @@ pub fn install() -> Result<()> {
         }
     }
 
-    // Get the current binary path
+    // Get the current binary path. Claude Code invokes statusLine via Git Bash on
+    // Windows: backslashes are escape chars and \\?\/UNC prefixes are unrunnable.
+    // dunce::simplified strips verbatim prefixes when safe; path-slash converts
+    // separators. Both are no-ops on Unix.
     let binary_path =
         std::env::current_exe().context("Failed to determine current executable path")?;
-    let binary_path_str = binary_path
-        .to_str()
+    let binary_path_str = dunce::simplified(&binary_path)
+        .to_slash()
         .context("Binary path contains invalid UTF-8")?;
+    if cfg!(windows) && binary_path_str.starts_with("\\\\") {
+        anyhow::bail!(
+            "Binary path uses an extended-length or UNC prefix Git Bash cannot execute: {}\n\
+             Install under a regular drive path (e.g. C:/Users/<you>/.local/bin/).",
+            binary_path_str
+        );
+    }
 
     // Create statusLine configuration
     let status_line_config = json!({

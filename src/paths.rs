@@ -3,9 +3,10 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn home_dir() -> Result<PathBuf> {
-    std::env::var("HOME")
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .context("HOME not set")
+        .context("HOME (or USERPROFILE on Windows) not set")
 }
 
 pub fn claude_config_dir() -> Result<PathBuf> {
