@@ -19,6 +19,8 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
@@ -30,11 +32,19 @@ jobs:
           targets: ${{ matrix.target }}
           components: clippy, rustfmt
 
-      - name: Install cross-compilation tools
+      - name: Install cross-compilation tools (aarch64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu pkg-config
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Install cross-compilation tools (windows-gnu)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
         env:
           DEBIAN_FRONTEND: noninteractive
 
@@ -43,8 +53,8 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Run clippy
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
+        run: cargo clippy --all-targets --all-features --target ${{ matrix.target }} -- -D warnings
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
