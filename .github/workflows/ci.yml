@@ -21,6 +21,8 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: ubuntu-latest
             target: x86_64-pc-windows-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
@@ -53,7 +55,7 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Run clippy
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-gnu' || matrix.target == 'aarch64-apple-darwin'
         run: cargo clippy --all-targets --all-features --target ${{ matrix.target }} -- -D warnings
 
       - name: Build
@@ -63,5 +65,5 @@ jobs:
           PKG_CONFIG_ALLOW_CROSS: 1
 
       - name: Run tests
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin'
         run: cargo test --release

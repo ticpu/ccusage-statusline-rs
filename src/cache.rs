@@ -15,7 +15,13 @@ pub fn get_cache_dir() -> Result<PathBuf> {
         .unwrap_or_else(|| {
             #[cfg(unix)]
             {
-                PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()))
+                let candidate =
+                    PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()));
+                if candidate.is_dir() {
+                    candidate
+                } else {
+                    std::env::temp_dir()
+                }
             }
             #[cfg(not(unix))]
             {
