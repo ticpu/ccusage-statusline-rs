@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Create tarball
         run: |
@@ -52,14 +52,14 @@ jobs:
             target: x86_64-pc-windows-gnu
             artifact_name: ccusage-statusline-rs-windows-x86_64.exe
             binary_ext: ".exe"
-          - os: macos-latest
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact_name: ccusage-statusline-rs-macos-aarch64
             binary_ext: ""
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
