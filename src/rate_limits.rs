@@ -1,9 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
+use std::io::{ErrorKind, IsTerminal, Read};
 use std::path::PathBuf;
 
 use crate::cache::get_cache_dir;
@@ -137,10 +137,15 @@ fn read_store() -> Result<RateLimitsStore> {
 
     let mut file = match File::open(&store_path) {
         Ok(f) => f,
-        Err(_) => {
+        Err(e) if e.kind() == ErrorKind::NotFound => {
             return Ok(RateLimitsStore {
                 five_hour: None,
                 seven_day: None,
+            });
+        }
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!("Failed to open rate-limit store {}", store_path.display())
             });
         }
     };
@@ -150,10 +155,22 @@ fn read_store() -> Result<RateLimitsStore> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
-    let mut store: RateLimitsStore = serde_json::from_str(&contents).unwrap_or(RateLimitsStore {
-        five_hour: None,
-        seven_day: None,
-    });
+    let mut store: RateLimitsStore = match serde_json::from_str(&contents) {
+        Ok(s) => s,
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!(
+                    "Rate-limit store parse error ({}): {}",
+                    store_path.display(),
+                    e
+                );
+            }
+            RateLimitsStore {
+                five_hour: None,
+                seven_day: None,
+            }
+        }
+    };
 
     FileExt::unlock(&file)?;
 
