@@ -12,6 +12,8 @@ pub struct HookData {
     pub workspace: Option<Workspace>,
     #[serde(default)]
     pub context_window: Option<ContextWindowData>,
+    #[serde(default)]
+    pub rate_limits: Option<RateLimits>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,6 +36,21 @@ pub struct ContextWindowData {
     pub total_input_tokens: Option<u64>,
     #[serde(default)]
     pub current_usage: Option<ContextUsage>,
+}
+
+/// Rate limits from Claude Code statusline stdin (epoch seconds)
+#[derive(Debug, Deserialize)]
+pub struct RateLimits {
+    #[serde(default)]
+    pub five_hour: Option<RateLimitWindow>,
+    #[serde(default)]
+    pub seven_day: Option<RateLimitWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RateLimitWindow {
+    pub used_percentage: f64,
+    pub resets_at: i64,
 }
 
 #[derive(Debug, Deserialize)]

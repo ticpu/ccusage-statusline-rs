@@ -210,6 +210,7 @@ mod tests {
                 total_input_tokens: Some(42_000),
                 current_usage: None,
             }),
+            rate_limits: None,
         };
         let info = calculate_context(&hook)
             .unwrap()

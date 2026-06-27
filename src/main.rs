@@ -10,6 +10,7 @@ mod format;
 mod install;
 mod paths;
 mod pricing;
+mod rate_limits;
 mod types;
 
 use anyhow::{Context, Result};
@@ -207,6 +208,7 @@ fn run_test_mode() -> Result<()> {
                 .to_string(),
         }),
         context_window: None,
+        rate_limits: None,
     };
 
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
@@ -231,9 +233,16 @@ fn generate_statusline(
     } else {
         api_usage::ApiUsageResult::Unavailable
     };
-    let api_usage = api_result
+    let polled_api_usage = api_result
         .data()
         .cloned();
+
+    let api_usage = rate_limits::merge_and_get_effective_usage(
+        hook_data
+            .rate_limits
+            .as_ref(),
+        polled_api_usage,
+    )?;
 
     let pricing = PricingFetcher::new(&cache_dir)?;
     let claude_paths = find_claude_paths()?;
