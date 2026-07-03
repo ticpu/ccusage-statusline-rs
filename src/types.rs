@@ -223,6 +223,16 @@ pub enum LimitType {
     None,
 }
 
+impl LimitType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            LimitType::FiveHour => " 5h",
+            LimitType::SevenDay => " 7d",
+            LimitType::None => "",
+        }
+    }
+}
+
 /// User's plan type
 #[derive(Debug, Clone, Copy)]
 pub enum PlanType {
@@ -263,14 +273,19 @@ pub struct ContextInfo {
     pub percentage: u32,
 }
 
+/// Per-window usage data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageWindow {
+    pub percent: f64,
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
 /// API usage data from Anthropic API
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiUsageData {
-    pub five_hour_percent: f64,
-    pub five_hour_resets_at: Option<DateTime<Utc>>,
-    pub seven_day_percent: f64,
-    pub seven_day_resets_at: Option<DateTime<Utc>>,
-    pub seven_day_sonnet_percent: f64,
+    pub five_hour: Option<UsageWindow>,
+    pub seven_day: Option<UsageWindow>,
+    pub seven_day_sonnet: Option<f64>,
 }
 
 /// Claude configuration from ~/.claude.json

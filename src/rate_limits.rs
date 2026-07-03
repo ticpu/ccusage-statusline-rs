@@ -7,7 +7,7 @@ use std::io::{ErrorKind, IsTerminal, Read};
 use std::path::PathBuf;
 
 use crate::cache::get_cache_dir;
-use crate::types::{ApiUsageData, RateLimits};
+use crate::types::{ApiUsageData, RateLimits, UsageWindow};
 
 /// Stored rate limit reading with DateTime
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,7 +16,7 @@ pub struct StoredRateLimitWindow {
     pub resets_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct RateLimitsStore {
     five_hour: Option<StoredRateLimitWindow>,
     seven_day: Option<StoredRateLimitWindow>,
@@ -49,6 +49,17 @@ fn parse_stdin_window(resets_at: i64) -> Option<DateTime<Utc>> {
     if dt <= Utc::now() { None } else { Some(dt) }
 }
 
+/// Update slot with new_window if new_window supersedes the current value; returns true if updated
+fn merge_window(slot: &mut Option<StoredRateLimitWindow>, new: StoredRateLimitWindow) -> bool {
+    match slot {
+        Some(existing) if !supersedes(&new, existing) => false,
+        _ => {
+            *slot = Some(new);
+            true
+        }
+    }
+}
+
 /// Merge stdin reading into the store, update if it supersedes
 fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
     let store_path = get_store_path()?;
@@ -69,15 +80,9 @@ fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
     {
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
-        serde_json::from_str(&contents).unwrap_or(RateLimitsStore {
-            five_hour: None,
-            seven_day: None,
-        })
+        serde_json::from_str(&contents).unwrap_or_default()
     } else {
-        RateLimitsStore {
-            five_hour: None,
-            seven_day: None,
-        }
+        RateLimitsStore::default()
     };
 
     let mut updated = false;
@@ -85,39 +90,25 @@ fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
     if let Some(five_hour) = &stdin_limits.five_hour
         && let Some(resets_at) = parse_stdin_window(five_hour.resets_at)
     {
-        let new_window = StoredRateLimitWindow {
-            used_percentage: five_hour.used_percentage,
-            resets_at,
-        };
-
-        if let Some(existing) = &store.five_hour {
-            if supersedes(&new_window, existing) {
-                store.five_hour = Some(new_window);
-                updated = true;
-            }
-        } else {
-            store.five_hour = Some(new_window);
-            updated = true;
-        }
+        updated |= merge_window(
+            &mut store.five_hour,
+            StoredRateLimitWindow {
+                used_percentage: five_hour.used_percentage,
+                resets_at,
+            },
+        );
     }
 
     if let Some(seven_day) = &stdin_limits.seven_day
         && let Some(resets_at) = parse_stdin_window(seven_day.resets_at)
     {
-        let new_window = StoredRateLimitWindow {
-            used_percentage: seven_day.used_percentage,
-            resets_at,
-        };
-
-        if let Some(existing) = &store.seven_day {
-            if supersedes(&new_window, existing) {
-                store.seven_day = Some(new_window);
-                updated = true;
-            }
-        } else {
-            store.seven_day = Some(new_window);
-            updated = true;
-        }
+        updated |= merge_window(
+            &mut store.seven_day,
+            StoredRateLimitWindow {
+                used_percentage: seven_day.used_percentage,
+                resets_at,
+            },
+        );
     }
 
     if updated {
@@ -138,10 +129,7 @@ fn read_store() -> Result<RateLimitsStore> {
     let mut file = match File::open(&store_path) {
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            return Ok(RateLimitsStore {
-                five_hour: None,
-                seven_day: None,
-            });
+            return Ok(RateLimitsStore::default());
         }
         Err(e) => {
             return Err(e).with_context(|| {
@@ -165,10 +153,7 @@ fn read_store() -> Result<RateLimitsStore> {
                     e
                 );
             }
-            RateLimitsStore {
-                five_hour: None,
-                seven_day: None,
-            }
+            RateLimitsStore::default()
         }
     };
 
@@ -203,83 +188,89 @@ pub fn merge_and_get_effective_usage(
     Ok(merge_store_with_api_usage(&store, api_usage))
 }
 
+/// Merge a stored window with an API window, preferring whichever supersedes; None if neither has valid data
+fn effective_window(
+    store_win: Option<&StoredRateLimitWindow>,
+    api_win: Option<UsageWindow>,
+    now: DateTime<Utc>,
+) -> Option<UsageWindow> {
+    let valid_store = store_win.filter(|w| w.resets_at > now);
+
+    match (valid_store, api_win) {
+        (Some(s), Some(a)) => match a.resets_at {
+            Some(ar) if ar > now => {
+                let api_stored = StoredRateLimitWindow {
+                    used_percentage: a.percent,
+                    resets_at: ar,
+                };
+                if supersedes(&api_stored, s) {
+                    Some(a)
+                } else {
+                    Some(UsageWindow {
+                        percent: s.used_percentage,
+                        resets_at: Some(s.resets_at),
+                    })
+                }
+            }
+            _ => Some(UsageWindow {
+                percent: s.used_percentage,
+                resets_at: Some(s.resets_at),
+            }),
+        },
+        (Some(s), None) => Some(UsageWindow {
+            percent: s.used_percentage,
+            resets_at: Some(s.resets_at),
+        }),
+        (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
+}
+
 fn merge_store_with_api_usage(
     store: &RateLimitsStore,
     api_usage: Option<ApiUsageData>,
 ) -> Option<ApiUsageData> {
-    let mut result = api_usage
-        .clone()
-        .unwrap_or(ApiUsageData {
-            five_hour_percent: 0.0,
-            five_hour_resets_at: None,
-            seven_day_percent: 0.0,
-            seven_day_resets_at: None,
-            seven_day_sonnet_percent: 0.0,
-        });
-
     let now = Utc::now();
 
-    if let Some(store_5h) = &store.five_hour
-        && store_5h.resets_at > now
-    {
-        let store_reading = StoredRateLimitWindow {
-            used_percentage: store_5h.used_percentage,
-            resets_at: store_5h.resets_at,
-        };
-
-        let api_reading = api_usage
+    let five_hour = effective_window(
+        store
+            .five_hour
+            .as_ref(),
+        api_usage
             .as_ref()
-            .and_then(|api| {
-                api.five_hour_resets_at
-                    .map(|resets_at| StoredRateLimitWindow {
-                        used_percentage: api.five_hour_percent,
-                        resets_at,
-                    })
-            });
+            .and_then(|a| {
+                a.five_hour
+                    .clone()
+            }),
+        now,
+    );
 
-        match api_reading {
-            Some(api_win) if api_win.resets_at > now && supersedes(&api_win, &store_reading) => {
-                result.five_hour_percent = api_win.used_percentage;
-                result.five_hour_resets_at = Some(api_win.resets_at);
-            }
-            _ => {
-                result.five_hour_percent = store_reading.used_percentage;
-                result.five_hour_resets_at = Some(store_reading.resets_at);
-            }
-        }
+    let seven_day = effective_window(
+        store
+            .seven_day
+            .as_ref(),
+        api_usage
+            .as_ref()
+            .and_then(|a| {
+                a.seven_day
+                    .clone()
+            }),
+        now,
+    );
+
+    let seven_day_sonnet = api_usage
+        .as_ref()
+        .and_then(|a| a.seven_day_sonnet);
+
+    if five_hour.is_none() && seven_day.is_none() && seven_day_sonnet.is_none() {
+        return None;
     }
 
-    if let Some(store_7d) = &store.seven_day
-        && store_7d.resets_at > now
-    {
-        let store_reading = StoredRateLimitWindow {
-            used_percentage: store_7d.used_percentage,
-            resets_at: store_7d.resets_at,
-        };
-
-        let api_reading = api_usage
-            .as_ref()
-            .and_then(|api| {
-                api.seven_day_resets_at
-                    .map(|resets_at| StoredRateLimitWindow {
-                        used_percentage: api.seven_day_percent,
-                        resets_at,
-                    })
-            });
-
-        match api_reading {
-            Some(api_win) if api_win.resets_at > now && supersedes(&api_win, &store_reading) => {
-                result.seven_day_percent = api_win.used_percentage;
-                result.seven_day_resets_at = Some(api_win.resets_at);
-            }
-            _ => {
-                result.seven_day_percent = store_reading.used_percentage;
-                result.seven_day_resets_at = Some(store_reading.resets_at);
-            }
-        }
-    }
-
-    Some(result)
+    Some(ApiUsageData {
+        five_hour,
+        seven_day,
+        seven_day_sonnet,
+    })
 }
 
 #[cfg(test)]
@@ -343,6 +334,48 @@ mod tests {
         let dt = parse_stdin_window(future_epoch);
         assert!(dt.is_some());
         assert!(dt.unwrap() > Utc::now());
+    }
+
+    #[test]
+    fn test_merge_no_data_returns_none() {
+        let result = merge_store_with_api_usage(&RateLimitsStore::default(), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_merge_all_none_api_returns_none() {
+        let api = ApiUsageData {
+            five_hour: None,
+            seven_day: None,
+            seven_day_sonnet: None,
+        };
+        let result = merge_store_with_api_usage(&RateLimitsStore::default(), Some(api));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_merge_store_wins_when_no_api() {
+        let store = RateLimitsStore {
+            five_hour: Some(StoredRateLimitWindow {
+                used_percentage: 42.0,
+                resets_at: Utc::now() + Duration::from_secs(3600),
+            }),
+            seven_day: None,
+        };
+        let result = merge_store_with_api_usage(&store, None).unwrap();
+        assert_eq!(
+            result
+                .five_hour
+                .as_ref()
+                .unwrap()
+                .percent,
+            42.0
+        );
+        assert!(
+            result
+                .seven_day
+                .is_none()
+        );
     }
 
     #[test]

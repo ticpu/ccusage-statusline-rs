@@ -30,51 +30,48 @@ pub fn calculate_burn_rate(
         }
     };
 
-    let five_hour_ratio = calculate_limit_ratio(
-        api_usage.five_hour_percent,
-        api_usage.five_hour_resets_at,
-        5.0,
-    );
+    let five_hour_resets_at = api_usage
+        .five_hour
+        .as_ref()
+        .and_then(|w| w.resets_at);
+    let seven_day_resets_at = api_usage
+        .seven_day
+        .as_ref()
+        .and_then(|w| w.resets_at);
 
-    let seven_day_ratio = calculate_limit_ratio(
-        api_usage.seven_day_percent,
-        api_usage.seven_day_resets_at,
-        168.0,
-    );
+    let five_hour_ratio = api_usage
+        .five_hour
+        .as_ref()
+        .map_or(0.0, |w| calculate_limit_ratio(w.percent, w.resets_at, 5.0));
+    let seven_day_ratio = api_usage
+        .seven_day
+        .as_ref()
+        .map_or(0.0, |w| {
+            calculate_limit_ratio(w.percent, w.resets_at, 168.0)
+        });
 
     let (critical_limit, ratio, reset_at) = if five_hour_ratio >= burn_rate_show_ratio {
-        (
-            LimitType::FiveHour,
-            five_hour_ratio,
-            api_usage.five_hour_resets_at,
-        )
+        (LimitType::FiveHour, five_hour_ratio, five_hour_resets_at)
     } else if seven_day_ratio >= burn_rate_show_ratio {
-        (
-            LimitType::SevenDay,
-            seven_day_ratio,
-            api_usage.seven_day_resets_at,
-        )
+        (LimitType::SevenDay, seven_day_ratio, seven_day_resets_at)
     } else if five_hour_ratio > 0.0 {
-        (
-            LimitType::FiveHour,
-            five_hour_ratio,
-            api_usage.five_hour_resets_at,
-        )
+        (LimitType::FiveHour, five_hour_ratio, five_hour_resets_at)
     } else if seven_day_ratio > 0.0 {
-        (
-            LimitType::SevenDay,
-            seven_day_ratio,
-            api_usage.seven_day_resets_at,
-        )
+        (LimitType::SevenDay, seven_day_ratio, seven_day_resets_at)
     } else {
         (LimitType::None, 0.0, None)
     };
 
-    let is_at_limit = api_usage.five_hour_percent >= 100.0 || api_usage.seven_day_percent >= 100.0;
+    let is_at_limit = api_usage
+        .five_hour
+        .as_ref()
+        .is_some_and(|w| w.percent >= 100.0)
+        || api_usage
+            .seven_day
+            .as_ref()
+            .is_some_and(|w| w.percent >= 100.0);
     let reset_in = reset_at.map(|reset| reset - now);
-    let seven_day_reset_in = api_usage
-        .seven_day_resets_at
-        .map(|reset| reset - now);
+    let seven_day_reset_in = seven_day_resets_at.map(|reset| reset - now);
 
     Ok(BurnRate {
         cost_per_hour,
