@@ -1,7 +1,15 @@
-use crate::types::{ModelPricing, PricingCache, TokenPrices, UsageData};
+use crate::types::{ModelPricing, TokenPrices, UsageData};
 use anyhow::{Context, Result};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Cached pricing data with timestamp
+#[derive(Debug, Deserialize, Serialize)]
+struct PricingCache {
+    timestamp: i64,
+    models: HashMap<String, ModelPricing>,
+}
 use std::io::IsTerminal;
 use std::path::Path;
 

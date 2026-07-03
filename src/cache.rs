@@ -1,11 +1,19 @@
-use crate::types::Semaphore;
 use anyhow::{Context, Result};
-use chrono::Utc;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+/// Semaphore cache for fast statusline rendering.
+/// `date` and `transcript_path` are omitted — write-only fields dropped; old cache files
+/// with those extra fields still parse correctly (serde ignores unknown fields).
+#[derive(Debug, Serialize, Deserialize)]
+struct Semaphore {
+    last_output: String,
+    last_update_time: u64,
+    transcript_mtime: u64,
+}
 
 /// Get cache directory from XDG_RUNTIME_DIR, scoped per config dir.
 /// Computed once per process; env lookups and create_dir_all happen only once.
@@ -183,10 +191,8 @@ pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> R
     let mtime = path_mtime_secs(transcript_path)?;
 
     let semaphore = Semaphore {
-        date: Utc::now().to_rfc3339(),
         last_output: output.to_string(),
         last_update_time: now,
-        transcript_path: transcript_path.to_string(),
         transcript_mtime: mtime,
     };
 
