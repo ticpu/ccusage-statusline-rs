@@ -258,6 +258,7 @@ fn generate_statusline(
     let mut parts = Vec::new();
     let mut api_metrics_emitted = false;
     let mut burn_rate_emitted = false;
+    let mut update_emitted = false;
 
     for element in &statusline_config.enabled_elements {
         match element {
@@ -342,8 +343,11 @@ fn generate_statusline(
                 }
             }
             StatusElement::UpdateStable | StatusElement::UpdateLatest => {
-                if let Some(ref new_version) = update_available {
-                    parts.push(format!("🔼{}", new_version));
+                if !update_emitted {
+                    update_emitted = true;
+                    if let Some(ref new_version) = update_available {
+                        parts.push(format!("🔼{}", new_version));
+                    }
                 }
             }
             StatusElement::Directory => {
