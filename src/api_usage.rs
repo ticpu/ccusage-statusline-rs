@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::cache::get_cache_dir;
 use crate::paths::claude_config_dir;
-use crate::types::{ApiUsageData, PlanType};
+use crate::types::{ApiUsageData, PlanType, UsageWindow};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UsageLimit {
@@ -326,38 +326,26 @@ fn read_envelope_from_file(file: &mut File) -> Result<CacheEnvelope> {
     Ok(envelope)
 }
 
+fn parse_window(limit: UsageLimit) -> UsageWindow {
+    let resets_at = limit
+        .resets_at
+        .and_then(|s| {
+            s.parse::<DateTime<Utc>>()
+                .ok()
+        });
+    UsageWindow {
+        percent: limit.utilization,
+        resets_at,
+    }
+}
+
 fn parse_api_response(api_response: ApiResponse) -> ApiUsageData {
-    let five_hour_resets_at = api_response
-        .five_hour
-        .resets_at
-        .and_then(|s| {
-            s.parse::<DateTime<Utc>>()
-                .ok()
-        });
-
-    let seven_day_resets_at = api_response
-        .seven_day
-        .resets_at
-        .and_then(|s| {
-            s.parse::<DateTime<Utc>>()
-                .ok()
-        });
-
-    let seven_day_sonnet_percent = api_response
-        .seven_day_sonnet
-        .map(|l| l.utilization)
-        .unwrap_or(0.0);
-
     ApiUsageData {
-        five_hour_percent: api_response
-            .five_hour
-            .utilization,
-        five_hour_resets_at,
-        seven_day_percent: api_response
-            .seven_day
-            .utilization,
-        seven_day_resets_at,
-        seven_day_sonnet_percent,
+        five_hour: Some(parse_window(api_response.five_hour)),
+        seven_day: Some(parse_window(api_response.seven_day)),
+        seven_day_sonnet: api_response
+            .seven_day_sonnet
+            .map(|l| l.utilization),
     }
 }
 
@@ -574,12 +562,17 @@ mod tests {
 
     #[test]
     fn test_api_usage_result_data() {
+        use crate::types::UsageWindow;
         let data = ApiUsageData {
-            five_hour_percent: 25.0,
-            five_hour_resets_at: None,
-            seven_day_percent: 10.0,
-            seven_day_resets_at: None,
-            seven_day_sonnet_percent: 5.0,
+            five_hour: Some(UsageWindow {
+                percent: 25.0,
+                resets_at: None,
+            }),
+            seven_day: Some(UsageWindow {
+                percent: 10.0,
+                resets_at: None,
+            }),
+            seven_day_sonnet: Some(5.0),
         };
         let result = ApiUsageResult::Ok(data.clone());
         assert!(
@@ -591,7 +584,10 @@ mod tests {
             result
                 .data()
                 .unwrap()
-                .five_hour_percent,
+                .five_hour
+                .as_ref()
+                .unwrap()
+                .percent,
             25.0
         );
         assert!(
