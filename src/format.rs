@@ -1,15 +1,14 @@
 use crate::config::{StatusElement, Thresholds};
-use crate::types::{ApiUsageData, Block, BurnRate, ContextInfo, LimitType, PlanType};
+use crate::types::{ActiveBlock, ApiUsageData, BurnRate, ContextInfo, LimitType, PlanType};
 use chrono::{Duration, Utc};
 use owo_colors::OwoColorize;
 
 /// Format block cost
-pub fn format_block_info(block: &Block) -> String {
-    if !block.is_active {
-        return "No block".to_string();
+pub fn format_block_info(block: Option<&ActiveBlock>) -> String {
+    match block {
+        Some(b) => format_currency(b.cost_usd),
+        None => "No block".to_string(),
     }
-
-    format_currency(block.cost_usd)
 }
 
 /// Pick clock emoji based on hours remaining
@@ -25,13 +24,15 @@ fn get_clock_emoji(remaining_hours: f64) -> &'static str {
 
 /// Format 5-hour time remaining (subscription only)
 pub fn format_time_remaining_5h(
-    block: &Block,
+    block: Option<&ActiveBlock>,
     api_usage: Option<&ApiUsageData>,
     plan_type: PlanType,
 ) -> Option<String> {
-    if matches!(plan_type, PlanType::Api) || !block.is_active {
+    if matches!(plan_type, PlanType::Api) {
         return None;
     }
+
+    let block = block?;
 
     let now = Utc::now();
     let remaining_hours = if let Some(reset_time) = api_usage
@@ -43,9 +44,7 @@ pub fn format_time_remaining_5h(
     {
         (reset_time - now).num_seconds() as f64 / 3600.0
     } else {
-        block
-            .hours_remaining
-            .unwrap_or(0.0)
+        block.hours_remaining
     };
 
     Some(format_hours_remaining(remaining_hours))

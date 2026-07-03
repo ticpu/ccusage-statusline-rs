@@ -1,6 +1,6 @@
 use crate::paths::iter_jsonl_files_since;
 use crate::pricing::PricingFetcher;
-use crate::types::{Block, UsageData};
+use crate::types::{ActiveBlock, UsageData};
 use anyhow::Result;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use std::collections::HashSet;
@@ -11,6 +11,14 @@ use std::path::PathBuf;
 const BLOCK_DURATION_HOURS: i64 = 5;
 const FILE_LOOKBACK_HOURS: i64 = 12; // Look back 12h to catch overlapping blocks
 const BUFREADER_CAPACITY: usize = 8192;
+
+/// Internal representation of a billing block span
+struct Block {
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    cost_usd: f64,
+    is_active: bool,
+}
 
 /// Floor timestamp to the beginning of the hour in UTC
 fn floor_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
@@ -90,13 +98,6 @@ fn create_block_from_entries(
     let time_since_last_activity = now.timestamp_millis() - actual_end_time.timestamp_millis();
     let is_active = time_since_last_activity < session_duration_ms && now < end_time;
 
-    let hours_remaining = if is_active {
-        let remaining = (end_time - now).num_seconds() as f64 / 3600.0;
-        Some(remaining.max(0.0))
-    } else {
-        None
-    };
-
     let mut cost_usd = 0.0;
     for entry in entries {
         cost_usd += pricing.calculate_entry_cost(entry);
@@ -107,12 +108,14 @@ fn create_block_from_entries(
         end_time,
         cost_usd,
         is_active,
-        hours_remaining,
     }
 }
 
-/// Find active billing block
-pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> Result<Block> {
+/// Find the most recent active billing block, if any.
+pub fn find_active_block(
+    claude_paths: &[PathBuf],
+    pricing: &PricingFetcher,
+) -> Result<Option<ActiveBlock>> {
     let mut all_entries: Vec<UsageData> = Vec::with_capacity(1000);
     let mut processed_hashes: HashSet<String> = HashSet::with_capacity(1000);
 
@@ -182,16 +185,14 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
         .rev()
     {
         if block.is_active && block.end_time > now {
-            return Ok(block.clone());
+            let hours_remaining = ((block.end_time - now).num_seconds() as f64 / 3600.0).max(0.0);
+            return Ok(Some(ActiveBlock {
+                start_time: block.start_time,
+                cost_usd: block.cost_usd,
+                hours_remaining,
+            }));
         }
     }
 
-    let next_end = now + Duration::hours(BLOCK_DURATION_HOURS);
-    Ok(Block {
-        start_time: now,
-        end_time: next_end,
-        cost_usd: 0.0,
-        is_active: false,
-        hours_remaining: None,
-    })
+    Ok(None)
 }

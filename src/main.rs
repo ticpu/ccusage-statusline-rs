@@ -221,7 +221,7 @@ fn generate_statusline(
     let claude_paths = find_claude_paths()?;
     let block = find_active_block(&claude_paths, &pricing)?;
     let burn_rate = calculate_burn_rate(
-        &block,
+        block.as_ref(),
         api_usage.as_ref(),
         thresholds.burn_rate_show_ratio(),
     )?;
@@ -245,10 +245,11 @@ fn generate_statusline(
                 }
             }
             StatusElement::BlockCost => {
-                parts.push(format!("💰{}", format_block_info(&block)));
+                parts.push(format!("💰{}", format_block_info(block.as_ref())));
             }
             StatusElement::TimeRemaining5h => {
-                if let Some(time) = format_time_remaining_5h(&block, api_usage.as_ref(), plan_type)
+                if let Some(time) =
+                    format_time_remaining_5h(block.as_ref(), api_usage.as_ref(), plan_type)
                 {
                     parts.push(time);
                 }

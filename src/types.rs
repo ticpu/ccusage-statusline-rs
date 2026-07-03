@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Hook input data from Claude Code
 #[derive(Debug, Deserialize)]
@@ -35,7 +34,7 @@ pub struct ContextWindowData {
     #[serde(default)]
     pub total_input_tokens: Option<u64>,
     #[serde(default)]
-    pub current_usage: Option<ContextUsage>,
+    pub current_usage: Option<UsageTokens>,
 }
 
 /// Rate limits from Claude Code statusline stdin (epoch seconds)
@@ -51,16 +50,6 @@ pub struct RateLimits {
 pub struct RateLimitWindow {
     pub used_percentage: f64,
     pub resets_at: i64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ContextUsage {
-    #[serde(default)]
-    pub input_tokens: u64,
-    #[serde(default)]
-    pub cache_creation_input_tokens: u64,
-    #[serde(default)]
-    pub cache_read_input_tokens: u64,
 }
 
 /// Usage data entry from JSONL
@@ -83,12 +72,21 @@ pub struct MessageData {
 
 #[derive(Debug, Deserialize)]
 pub struct UsageTokens {
+    #[serde(default)]
     pub input_tokens: u64,
+    #[serde(default)]
     pub output_tokens: u64,
     #[serde(default)]
     pub cache_creation_input_tokens: u64,
     #[serde(default)]
     pub cache_read_input_tokens: u64,
+}
+
+impl UsageTokens {
+    /// Total context tokens (input + cache writes + cache reads; excludes output)
+    pub fn context_tokens(&self) -> u64 {
+        self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
+    }
 }
 
 /// LiteLLM Model Pricing (matching TypeScript schema)
@@ -137,82 +135,73 @@ impl ModelPricing {
         }
     }
 
-    /// Calculate cost with tiered pricing
-    pub fn calculate_tiered_cost(
-        &self,
-        tokens: u64,
-        base_price: Option<f64>,
-        tiered_price: Option<f64>,
-    ) -> f64 {
-        if tokens == 0 {
-            return 0.0;
-        }
-
-        let base = base_price.unwrap_or(0.0);
-
-        if tokens <= Self::THRESHOLD {
-            tokens as f64 * base
-        } else {
-            let tiered = tiered_price.unwrap_or(base);
-            (Self::THRESHOLD as f64 * base) + ((tokens - Self::THRESHOLD) as f64 * tiered)
-        }
-    }
-
-    /// Calculate total cost for a usage entry
+    /// Calculate total cost for a usage entry using tiered pricing.
+    /// Converts to (base, tiered) pair once, then iterates over the four token categories.
     pub fn calculate_cost(&self, usage: &UsageTokens) -> f64 {
-        let input_cost = self.calculate_tiered_cost(
-            usage.input_tokens,
-            self.input_cost_per_token,
-            self.input_cost_per_token_above_200k_tokens,
-        );
+        let base = TokenPrices {
+            input: self
+                .input_cost_per_token
+                .unwrap_or(0.0),
+            output: self
+                .output_cost_per_token
+                .unwrap_or(0.0),
+            cache_write: self
+                .cache_creation_input_token_cost
+                .unwrap_or(0.0),
+            cache_read: self
+                .cache_read_input_token_cost
+                .unwrap_or(0.0),
+        };
+        let tiered = TokenPrices {
+            input: self
+                .input_cost_per_token_above_200k_tokens
+                .unwrap_or(base.input),
+            output: self
+                .output_cost_per_token_above_200k_tokens
+                .unwrap_or(base.output),
+            cache_write: self
+                .cache_creation_input_token_cost_above_200k_tokens
+                .unwrap_or(base.cache_write),
+            cache_read: self
+                .cache_read_input_token_cost_above_200k_tokens
+                .unwrap_or(base.cache_read),
+        };
 
-        let output_cost = self.calculate_tiered_cost(
-            usage.output_tokens,
-            self.output_cost_per_token,
-            self.output_cost_per_token_above_200k_tokens,
-        );
-
-        let cache_write_cost = self.calculate_tiered_cost(
-            usage.cache_creation_input_tokens,
-            self.cache_creation_input_token_cost,
-            self.cache_creation_input_token_cost_above_200k_tokens,
-        );
-
-        let cache_read_cost = self.calculate_tiered_cost(
-            usage.cache_read_input_tokens,
-            self.cache_read_input_token_cost,
-            self.cache_read_input_token_cost_above_200k_tokens,
-        );
-
-        input_cost + output_cost + cache_write_cost + cache_read_cost
+        [
+            (usage.input_tokens, base.input, tiered.input),
+            (usage.output_tokens, base.output, tiered.output),
+            (
+                usage.cache_creation_input_tokens,
+                base.cache_write,
+                tiered.cache_write,
+            ),
+            (
+                usage.cache_read_input_tokens,
+                base.cache_read,
+                tiered.cache_read,
+            ),
+        ]
+        .iter()
+        .map(|&(tokens, base_p, tiered_p)| {
+            if tokens == 0 {
+                return 0.0;
+            }
+            if tokens <= Self::THRESHOLD {
+                tokens as f64 * base_p
+            } else {
+                Self::THRESHOLD as f64 * base_p + (tokens - Self::THRESHOLD) as f64 * tiered_p
+            }
+        })
+        .sum()
     }
 }
 
-/// Cached pricing data with timestamp
-#[derive(Debug, Deserialize, Serialize)]
-pub struct PricingCache {
-    pub timestamp: i64,
-    pub models: HashMap<String, ModelPricing>,
-}
-
-/// Semaphore cache for fast statusline rendering
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Semaphore {
-    pub date: String,
-    pub last_output: String,
-    pub last_update_time: u64,
-    pub transcript_path: String,
-    pub transcript_mtime: u64,
-}
-
-/// 5-hour billing block
+/// Active 5-hour billing block (only present when a block is actually active)
 #[derive(Debug, Clone)]
-pub struct Block {
+pub struct ActiveBlock {
     pub start_time: DateTime<Utc>,
-    pub end_time: DateTime<Utc>,
     pub cost_usd: f64,
-    pub is_active: bool,
-    pub hours_remaining: Option<f64>,
+    pub hours_remaining: f64,
 }
 
 /// Which limit is critical
@@ -286,15 +275,4 @@ pub struct ApiUsageData {
     pub five_hour: Option<UsageWindow>,
     pub seven_day: Option<UsageWindow>,
     pub seven_day_sonnet: Option<f64>,
-}
-
-/// Claude configuration from ~/.claude.json
-#[derive(Debug, Deserialize)]
-pub struct ClaudeConfig {
-    #[serde(default = "default_auto_compact", rename = "autoCompactEnabled")]
-    pub auto_compact_enabled: bool,
-}
-
-fn default_auto_compact() -> bool {
-    true
 }

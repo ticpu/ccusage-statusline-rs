@@ -1,15 +1,16 @@
-use crate::types::{ApiUsageData, Block, BurnRate, LimitType};
+use crate::types::{ActiveBlock, ApiUsageData, BurnRate, LimitType};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 pub fn calculate_burn_rate(
-    block: &Block,
+    block: Option<&ActiveBlock>,
     api_usage: Option<&ApiUsageData>,
     burn_rate_show_ratio: f64,
 ) -> Result<BurnRate> {
-    if !block.is_active {
-        return Ok(BurnRate::default());
-    }
+    let block = match block {
+        Some(b) => b,
+        None => return Ok(BurnRate::default()),
+    };
 
     let now = Utc::now();
     let elapsed = (now - block.start_time).num_minutes() as f64;
