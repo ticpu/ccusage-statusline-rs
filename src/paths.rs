@@ -17,6 +17,16 @@ pub fn claude_config_dir() -> Result<PathBuf> {
     }
 }
 
+/// Path to `.claude.json`: `$CLAUDE_CONFIG_DIR/.claude.json` when the env var is set,
+/// otherwise `$HOME/.claude.json` (Claude Code stores it directly in $HOME by default).
+pub fn claude_config_json_path() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        Ok(PathBuf::from(dir).join(".claude.json"))
+    } else {
+        Ok(home_dir()?.join(".claude.json"))
+    }
+}
+
 pub fn find_claude_paths() -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
 

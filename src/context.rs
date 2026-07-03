@@ -1,10 +1,10 @@
 use crate::{
-    paths::claude_config_dir,
+    paths::claude_config_json_path,
     types::{ClaudeConfig, ContextInfo, ContextWindowData, HookData, UsageData},
 };
 use anyhow::Result;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind, IsTerminal};
 
 const COMPACTED_CONTEXT_LIMIT: u64 = 155_000;
 const FULL_CONTEXT_LIMIT: u64 = 200_000;
@@ -50,33 +50,57 @@ fn is_1m_context_model(model_id: &str) -> bool {
     base.starts_with("claude-opus-4-6") || base.starts_with("claude-sonnet-4-6")
 }
 
-fn get_context_limit(model_id: Option<&str>) -> u64 {
+/// Pure decision core: model id + parsed config → context limit constant.
+fn select_context_limit(model_id: Option<&str>, config: Option<&ClaudeConfig>) -> u64 {
     if let Some(id) = model_id
         && is_1m_context_model(id)
     {
         return EXTENDED_CONTEXT_LIMIT;
     }
 
-    let config_dir = match claude_config_dir() {
-        Ok(d) => d,
-        Err(_) => return COMPACTED_CONTEXT_LIMIT,
+    match config {
+        Some(c) if !c.auto_compact_enabled => FULL_CONTEXT_LIMIT,
+        _ => COMPACTED_CONTEXT_LIMIT,
+    }
+}
+
+fn get_context_limit(model_id: Option<&str>) -> u64 {
+    let config_path = match claude_config_json_path() {
+        Ok(p) => p,
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!("Context limit: could not determine config path: {e:#}");
+            }
+            return select_context_limit(model_id, None);
+        }
     };
 
-    let config_path = config_dir.join(".claude.json");
-
-    match fs::read_to_string(&config_path) {
+    let config = match fs::read_to_string(&config_path) {
         Ok(content) => match serde_json::from_str::<ClaudeConfig>(&content) {
-            Ok(config) => {
-                if config.auto_compact_enabled {
-                    COMPACTED_CONTEXT_LIMIT
-                } else {
-                    FULL_CONTEXT_LIMIT
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!(
+                        "Context limit: failed to parse {}: {e:#}",
+                        config_path.display()
+                    );
                 }
+                None
             }
-            Err(_) => COMPACTED_CONTEXT_LIMIT,
         },
-        Err(_) => COMPACTED_CONTEXT_LIMIT,
-    }
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!(
+                    "Context limit: failed to read {}: {e:#}",
+                    config_path.display()
+                );
+            }
+            None
+        }
+    };
+
+    select_context_limit(model_id, config.as_ref())
 }
 
 fn calculate_context_from_transcript(
@@ -130,6 +154,23 @@ fn calculate_context_from_transcript(
 mod tests {
     use super::*;
     use crate::types::{ContextUsage, ModelInfo};
+    use std::fs;
+    use std::io::Write;
+
+    fn write_jsonl(path: &std::path::Path, lines: &[&str]) {
+        let mut f = fs::File::create(path).unwrap();
+        for line in lines {
+            writeln!(f, "{line}").unwrap();
+        }
+    }
+
+    fn compacted_config() -> ClaudeConfig {
+        serde_json::from_str(r#"{"autoCompactEnabled": true}"#).unwrap()
+    }
+
+    fn full_config() -> ClaudeConfig {
+        serde_json::from_str(r#"{"autoCompactEnabled": false}"#).unwrap()
+    }
 
     #[test]
     fn test_context_from_window_1m() {
@@ -219,68 +260,167 @@ mod tests {
         assert_eq!(info.tokens, 42_000);
     }
 
-    #[test]
-    fn test_context_calculation_with_caching_compacted() {
-        let tokens = 10 + 500 + 95000;
-        let percentage =
-            ((tokens as f64 / COMPACTED_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+    // select_context_limit: pure function tests — no IO, no real home directory
 
-        assert_eq!(tokens, 95510);
-        assert_eq!(percentage, 61);
+    #[test]
+    fn test_select_limit_1m_model() {
+        assert_eq!(
+            select_context_limit(Some("claude-sonnet-4-6"), None),
+            EXTENDED_CONTEXT_LIMIT
+        );
+        assert_eq!(
+            select_context_limit(Some("claude-opus-4-6"), Some(&compacted_config())),
+            EXTENDED_CONTEXT_LIMIT
+        );
     }
 
     #[test]
-    fn test_context_calculation_with_caching_full() {
-        let tokens = 10 + 500 + 95000;
-        let percentage = ((tokens as f64 / FULL_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
-
-        assert_eq!(tokens, 95510);
-        assert_eq!(percentage, 47);
+    fn test_select_limit_1m_overrides_full_config() {
+        assert_eq!(
+            select_context_limit(Some("claude-opus-4-6"), Some(&full_config())),
+            EXTENDED_CONTEXT_LIMIT
+        );
     }
 
     #[test]
-    fn test_context_calculation_1m() {
-        let tokens = 10 + 500 + 95000;
-        let percentage =
-            ((tokens as f64 / EXTENDED_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
-
-        assert_eq!(tokens, 95510);
-        assert_eq!(percentage, 9);
+    fn test_select_limit_auto_compact_enabled() {
+        assert_eq!(
+            select_context_limit(Some("claude-sonnet-4-5"), Some(&compacted_config())),
+            COMPACTED_CONTEXT_LIMIT
+        );
     }
 
     #[test]
-    fn test_context_calculation_without_caching_compacted() {
-        let tokens = 1000;
-        let percentage =
-            ((tokens as f64 / COMPACTED_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
-
-        assert_eq!(tokens, 1000);
-        assert_eq!(percentage, 0);
+    fn test_select_limit_auto_compact_disabled() {
+        assert_eq!(
+            select_context_limit(Some("claude-sonnet-4-5"), Some(&full_config())),
+            FULL_CONTEXT_LIMIT
+        );
     }
 
     #[test]
-    fn test_context_calculation_without_caching_full() {
-        let tokens = 1000;
-        let percentage = ((tokens as f64 / FULL_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+    fn test_select_limit_no_config_defaults_compacted() {
+        assert_eq!(
+            select_context_limit(Some("claude-sonnet-4-5"), None),
+            COMPACTED_CONTEXT_LIMIT
+        );
+        assert_eq!(select_context_limit(None, None), COMPACTED_CONTEXT_LIMIT);
+    }
 
-        assert_eq!(tokens, 1000);
-        assert_eq!(percentage, 0);
+    // calculate_context_from_transcript: drive production code with temp JSONL fixtures
+
+    #[test]
+    fn test_transcript_compacted_limit() {
+        let dir = std::env::temp_dir().join("ccusage-test-ctx-compacted");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        // tokens: input=10, cache_creation=500, cache_read=95000 → total=95510
+        write_jsonl(
+            &path,
+            &[
+                r#"{"timestamp":"2024-01-01T00:00:00Z","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":500,"cache_read_input_tokens":95000}}}"#,
+            ],
+        );
+
+        // compacted config → 155_000 limit; 95510/155000 = 61%
+        let limit = select_context_limit(Some("claude-sonnet-4-5"), Some(&compacted_config()));
+        assert_eq!(limit, COMPACTED_CONTEXT_LIMIT);
+
+        let info = calculate_context_from_transcript(
+            path.to_str()
+                .unwrap(),
+            Some("claude-sonnet-4-5"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(info.tokens, 95_510);
+        // percentage depends on get_context_limit which reads real disk; check tokens only here.
+        // Limit selection is covered by test_select_limit_* above.
+        assert!(info.percentage <= 100);
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn test_context_calculation_capped_compacted() {
-        let tokens = 199_000u64;
-        let percentage =
-            ((tokens as f64 / COMPACTED_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+    fn test_transcript_1m_model_limit() {
+        let dir = std::env::temp_dir().join("ccusage-test-ctx-1m");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                r#"{"timestamp":"2024-01-01T00:00:00Z","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":500,"cache_read_input_tokens":95000}}}"#,
+            ],
+        );
 
-        assert_eq!(percentage, 100);
+        // 1M model → 1_000_000 limit; 95510/1000000 = 9%
+        let limit = select_context_limit(Some("claude-opus-4-6"), None);
+        assert_eq!(limit, EXTENDED_CONTEXT_LIMIT);
+
+        let info = calculate_context_from_transcript(
+            path.to_str()
+                .unwrap(),
+            Some("claude-opus-4-6"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(info.tokens, 95_510);
+        // 95510 / 1_000_000 * 100 = 9%
+        assert_eq!(info.percentage, 9);
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn test_context_calculation_capped_full() {
-        let tokens = 250_000u64;
-        let percentage = ((tokens as f64 / FULL_CONTEXT_LIMIT as f64) * 100.0).min(100.0) as u32;
+    fn test_transcript_multiple_entries_last_wins() {
+        let dir = std::env::temp_dir().join("ccusage-test-ctx-multi");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                r#"{"timestamp":"2024-01-01T00:00:00Z","message":{"usage":{"input_tokens":1000,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
+                r#"{"timestamp":"2024-01-01T00:01:00Z","message":{"usage":{"input_tokens":2000,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
+            ],
+        );
 
-        assert_eq!(percentage, 100);
+        let info = calculate_context_from_transcript(
+            path.to_str()
+                .unwrap(),
+            Some("claude-opus-4-6"),
+        )
+        .unwrap()
+        .unwrap();
+        // last entry: input=2000, total=2000; 2000/1_000_000*100 = 0%
+        assert_eq!(info.tokens, 2_000);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_transcript_empty_file() {
+        let dir = std::env::temp_dir().join("ccusage-test-ctx-empty");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        write_jsonl(&path, &[]);
+
+        let info = calculate_context_from_transcript(
+            path.to_str()
+                .unwrap(),
+            Some("claude-sonnet-4-5"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(info.tokens, 0);
+        assert_eq!(info.percentage, 0);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_transcript_nonexistent_returns_none() {
+        let info =
+            calculate_context_from_transcript("/nonexistent/path/session.jsonl", None).unwrap();
+        assert!(info.is_none());
     }
 }
