@@ -21,7 +21,11 @@ use cache::{cleanup_stale_locks, get_cache_dir, try_get_cached, update_cache};
 use clap::{Parser, Subcommand};
 use config::StatusElement;
 use context::calculate_context;
-use format::*;
+use format::{
+    BurnRateDisplay, format_api_metrics_group, format_block_info, format_burn_rate_component,
+    format_context, format_directory, format_time_remaining_5h, format_time_remaining_7d,
+    strip_emojis,
+};
 use paths::{find_claude_paths, iter_jsonl_files};
 use pricing::PricingFetcher;
 use std::fs;
