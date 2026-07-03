@@ -13,10 +13,8 @@ const GCS_STABLE_URL: &str = "https://storage.googleapis.com/claude-code-dist-86
 const UPDATE_CHECK_CACHE_TTL: Duration = Duration::from_secs(1800); // 30 minutes
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VersionChannel {
-    #[default]
+#[derive(Debug, Clone, Copy)]
+enum VersionChannel {
     Stable,
     Latest,
 }
