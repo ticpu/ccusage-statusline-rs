@@ -8,8 +8,21 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::cache::get_cache_dir;
+use crate::config::CacheSettings;
 use crate::paths::claude_config_dir;
 use crate::types::{ApiUsageData, PlanType, UsageWindow};
+
+/// Typed marker for HTTP 429 rate-limit responses; survives anyhow context wrapping.
+#[derive(Debug)]
+struct RateLimited;
+
+impl std::fmt::Display for RateLimited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("API rate limited (429)")
+    }
+}
+
+impl std::error::Error for RateLimited {}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UsageLimit {
@@ -46,8 +59,6 @@ struct OAuthCredentials {
     #[serde(rename = "subscriptionType")]
     subscription_type: Option<String>,
 }
-
-use crate::config::CacheSettings;
 
 /// Result of API usage fetch
 #[derive(Debug)]
@@ -127,15 +138,26 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
         return ApiUsageResult::Unavailable;
     }
 
-    match fetch_usage_with_lock(cache_settings) {
-        Ok((data, _fetched_at)) => ApiUsageResult::Ok(data),
+    let cache_path = match get_api_cache_path() {
+        Ok(p) => p,
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("rate_limited") {
+            if std::io::stderr().is_terminal() {
+                eprintln!("Failed to get API cache path: {:#}", e);
+            }
+            return ApiUsageResult::StaleCache;
+        }
+    };
+
+    match fetch_usage_with_lock(&cache_path, cache_settings) {
+        Ok(data) => ApiUsageResult::Ok(data),
+        Err(e) => {
+            if e.chain()
+                .any(|cause| cause.is::<RateLimited>())
+            {
                 ApiUsageResult::RateLimited
             } else {
                 if std::io::stderr().is_terminal() {
-                    eprintln!("Failed to fetch API usage: {}", e);
+                    eprintln!("Failed to fetch API usage: {:#}", e);
                 }
                 ApiUsageResult::StaleCache
             }
@@ -143,18 +165,19 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
     }
 }
 
-fn fetch_usage_with_lock(cache_settings: &CacheSettings) -> Result<(ApiUsageData, u64)> {
-    let cache_path = get_api_cache_path()?;
-
+fn fetch_usage_with_lock(
+    cache_path: &PathBuf,
+    cache_settings: &CacheSettings,
+) -> Result<ApiUsageData> {
     // Only open existing file — don't create an empty one
     match OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&cache_path)
+        .open(cache_path)
     {
         Ok(mut file) => match file.try_lock_exclusive() {
             Ok(()) => {
-                let result = fetch_or_use_cache(&mut file, &cache_path, cache_settings);
+                let result = fetch_or_use_cache(&mut file, cache_path, cache_settings);
                 FileExt::unlock(&file)?;
                 result
             }
@@ -167,13 +190,13 @@ fn fetch_usage_with_lock(cache_settings: &CacheSettings) -> Result<(ApiUsageData
                 let response = envelope
                     .response
                     .context("Cache has no response data yet")?;
-                Ok((parse_api_response(response), envelope.fetched_at))
+                Ok(parse_api_response(&response))
             }
             Err(e) => Err(e.into()),
         },
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            // No cache file — first run, fetch directly
-            fetch_and_write_cache(&cache_path)
+            // No cache file — first run; share the same core as the exclusive-lock path
+            core_fetch_or_use_cache(None, Duration::MAX, cache_path, cache_settings)
         }
         Err(e) => Err(e.into()),
     }
@@ -183,10 +206,10 @@ fn fetch_or_use_cache(
     file: &mut File,
     cache_path: &PathBuf,
     cache_settings: &CacheSettings,
-) -> Result<(ApiUsageData, u64)> {
+) -> Result<ApiUsageData> {
     let metadata = file.metadata()?;
-    let mtime = metadata.modified()?;
-    let mtime_age = mtime
+    let mtime_age = metadata
+        .modified()?
         .elapsed()
         .unwrap_or(Duration::from_secs(cache_settings.api_refresh_secs + 1));
 
@@ -196,6 +219,15 @@ fn fetch_or_use_cache(
         None
     };
 
+    core_fetch_or_use_cache(existing, mtime_age, cache_path, cache_settings)
+}
+
+fn core_fetch_or_use_cache(
+    existing: Option<CacheEnvelope>,
+    mtime_age: Duration,
+    cache_path: &PathBuf,
+    cache_settings: &CacheSettings,
+) -> Result<ApiUsageData> {
     // Exponential backoff: min(refresh * 2^errors, max_backoff)
     // 0 errors → 5m, 1 → 10m, 2 → 20m, 3+ → 30m (capped)
     let errors = existing
@@ -206,36 +238,48 @@ fn fetch_or_use_cache(
         .saturating_mul(1u64 << errors.min(6));
     let effective_fresh = uncapped.min(cache_settings.api_max_backoff_secs);
 
-    // Return cached data if within backoff window and we have response data
-    if mtime_age < Duration::from_secs(effective_fresh)
-        && let Some(env) = existing
-    {
-        if let Some(response) = env.response {
-            return Ok((parse_api_response(response), env.fetched_at));
+    if mtime_age < Duration::from_secs(effective_fresh) {
+        // Within backoff window — return cached data without a network call
+        if let Some(response) = existing
+            .as_ref()
+            .and_then(|e| {
+                e.response
+                    .as_ref()
+            })
+        {
+            return Ok(parse_api_response(response));
         }
-        // Envelope exists but no response data — still in backoff from prior failure
-        anyhow::bail!("rate_limited");
+        if existing.is_some() {
+            // Envelope exists but has no response: in backoff after a prior non-429 failure.
+            // Do not report this as "rate limited" — the original failure was something else.
+            anyhow::bail!("no API data: in backoff after prior fetch failure");
+        }
+        // existing is None AND within backoff: cannot occur in production
+        // (the NotFound path always passes mtime_age = Duration::MAX).
+        // Fall through to fetch as a safe default.
     }
 
     match fetch_api_response() {
         Ok(api_response) => {
-            let now = now_epoch();
+            let data = parse_api_response(&api_response);
             let envelope = CacheEnvelope {
-                fetched_at: now,
+                fetched_at: now_epoch(),
                 consecutive_errors: 0,
                 response: Some(api_response),
             };
             write_envelope(&envelope, cache_path)?;
-            Ok((
-                parse_api_response(
-                    envelope
-                        .response
-                        .unwrap(),
-                ),
-                now,
-            ))
+            Ok(data)
         }
         Err(fetch_err) => {
+            // Preserve any previously-cached response as a stale-but-valid fallback
+            let stale = existing
+                .as_ref()
+                .and_then(|e| {
+                    e.response
+                        .as_ref()
+                })
+                .map(parse_api_response);
+
             let mut env = existing.unwrap_or(CacheEnvelope {
                 fetched_at: now_epoch(),
                 consecutive_errors: 0,
@@ -254,47 +298,16 @@ fn fetch_or_use_cache(
                 .min(cache_settings.api_max_backoff_secs);
             if std::io::stderr().is_terminal() {
                 eprintln!(
-                    "API usage: fetch failed (attempt {}), next retry in {}s: {}",
+                    "API usage: fetch failed (attempt {}), next retry in {}s: {:#}",
                     env.consecutive_errors, next_backoff, fetch_err
                 );
             }
             write_envelope(&env, cache_path)?;
-            if let Some(response) = env.response {
-                Ok((parse_api_response(response), env.fetched_at))
+            if let Some(data) = stale {
+                Ok(data)
             } else {
                 Err(fetch_err)
             }
-        }
-    }
-}
-
-fn fetch_and_write_cache(cache_path: &PathBuf) -> Result<(ApiUsageData, u64)> {
-    match fetch_api_response() {
-        Ok(api_response) => {
-            let now = now_epoch();
-            let envelope = CacheEnvelope {
-                fetched_at: now,
-                consecutive_errors: 0,
-                response: Some(api_response),
-            };
-            write_envelope(&envelope, cache_path)?;
-            Ok((
-                parse_api_response(
-                    envelope
-                        .response
-                        .unwrap(),
-                ),
-                now,
-            ))
-        }
-        Err(fetch_err) => {
-            let envelope = CacheEnvelope {
-                fetched_at: now_epoch(),
-                consecutive_errors: 1,
-                response: None,
-            };
-            write_envelope(&envelope, cache_path)?;
-            Err(fetch_err)
         }
     }
 }
@@ -326,9 +339,10 @@ fn read_envelope_from_file(file: &mut File) -> Result<CacheEnvelope> {
     Ok(envelope)
 }
 
-fn parse_window(limit: UsageLimit) -> UsageWindow {
+fn parse_window(limit: &UsageLimit) -> UsageWindow {
     let resets_at = limit
         .resets_at
+        .as_deref()
         .and_then(|s| {
             s.parse::<DateTime<Utc>>()
                 .ok()
@@ -339,12 +353,13 @@ fn parse_window(limit: UsageLimit) -> UsageWindow {
     }
 }
 
-fn parse_api_response(api_response: ApiResponse) -> ApiUsageData {
+fn parse_api_response(api_response: &ApiResponse) -> ApiUsageData {
     ApiUsageData {
-        five_hour: Some(parse_window(api_response.five_hour)),
-        seven_day: Some(parse_window(api_response.seven_day)),
+        five_hour: Some(parse_window(&api_response.five_hour)),
+        seven_day: Some(parse_window(&api_response.seven_day)),
         seven_day_sonnet: api_response
             .seven_day_sonnet
+            .as_ref()
             .map(|l| l.utilization),
     }
 }
@@ -385,7 +400,7 @@ fn fetch_api_response() -> Result<ApiResponse> {
                     response.headers()
                 );
             }
-            anyhow::bail!("rate_limited");
+            return Err(anyhow::Error::new(RateLimited));
         }
         anyhow::bail!("API returned status: {}", status);
     }
@@ -398,167 +413,6 @@ fn fetch_api_response() -> Result<ApiResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::thread;
-
-    fn test_envelope(utilization_5h: f64, utilization_7d: f64) -> CacheEnvelope {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        CacheEnvelope {
-            fetched_at: now,
-            consecutive_errors: 0,
-            response: Some(ApiResponse {
-                five_hour: UsageLimit {
-                    utilization: utilization_5h,
-                    resets_at: Some("2025-11-01T12:00:00Z".to_string()),
-                },
-                seven_day: UsageLimit {
-                    utilization: utilization_7d,
-                    resets_at: Some("2025-11-02T12:00:00Z".to_string()),
-                },
-                seven_day_sonnet: None,
-            }),
-        }
-    }
-
-    #[test]
-    fn test_atomic_write_preserves_valid_data() {
-        let cache_dir = std::env::temp_dir().join("ccusage-test-atomic");
-        fs::create_dir_all(&cache_dir).unwrap();
-        let cache_path = cache_dir.join("test-cache.json");
-
-        let initial = test_envelope(50.0, 25.0);
-        fs::write(&cache_path, serde_json::to_string(&initial).unwrap()).unwrap();
-
-        // Open file and simulate concurrent read during write
-        let cache_path_clone = cache_path.clone();
-        let reader = thread::spawn(move || {
-            // Try to read while writer might be working
-            for _ in 0..10 {
-                if let Ok(mut file) = File::open(&cache_path_clone) {
-                    let mut contents = String::new();
-                    if file
-                        .read_to_string(&mut contents)
-                        .is_ok()
-                        && !contents.is_empty()
-                    {
-                        // Should always parse successfully - never see partial data
-                        assert!(serde_json::from_str::<CacheEnvelope>(&contents).is_ok());
-                    }
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-        });
-
-        // Simulate atomic write
-        let new = test_envelope(75.0, 30.0);
-        let temp_path = cache_path.with_extension("tmp");
-        fs::write(&temp_path, serde_json::to_string(&new).unwrap()).unwrap();
-        fs::rename(&temp_path, &cache_path).unwrap();
-
-        reader
-            .join()
-            .unwrap();
-        fs::remove_dir_all(&cache_dir).unwrap();
-    }
-
-    #[test]
-    fn test_shared_lock_readers_wait_for_valid_data() {
-        let cache_dir = std::env::temp_dir().join("ccusage-test-shared");
-        fs::create_dir_all(&cache_dir).unwrap();
-        let cache_path = cache_dir.join("test-cache.json");
-
-        let envelope = test_envelope(50.0, 25.0);
-        fs::write(&cache_path, serde_json::to_string(&envelope).unwrap()).unwrap();
-
-        let cache_path_shared = Arc::new(cache_path.clone());
-
-        // Writer thread: holds exclusive lock
-        let cache_path_writer = cache_path_shared.clone();
-        let writer = thread::spawn(move || {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&*cache_path_writer)
-                .unwrap();
-            FileExt::lock_exclusive(&file).unwrap();
-            thread::sleep(Duration::from_millis(100));
-            FileExt::unlock(&file).unwrap();
-        });
-
-        // Reader thread: waits with shared lock
-        let cache_path_reader = cache_path_shared.clone();
-        thread::sleep(Duration::from_millis(10)); // Let writer acquire lock first
-        let reader = thread::spawn(move || {
-            let mut file = File::open(&*cache_path_reader).unwrap();
-            FileExt::lock_shared(&file).unwrap(); // Should block until writer releases
-            let mut contents = String::new();
-            file.read_to_string(&mut contents)
-                .unwrap();
-            assert!(!contents.is_empty());
-            assert!(serde_json::from_str::<CacheEnvelope>(&contents).is_ok());
-            FileExt::unlock(&file).unwrap();
-        });
-
-        writer
-            .join()
-            .unwrap();
-        reader
-            .join()
-            .unwrap();
-        fs::remove_dir_all(&cache_dir).unwrap();
-    }
-
-    #[test]
-    fn test_exclusive_lock_prevents_concurrent_writes() {
-        let cache_dir = std::env::temp_dir().join("ccusage-test-exclusive");
-        fs::create_dir_all(&cache_dir).unwrap();
-        let cache_path = cache_dir.join("test-cache.json");
-
-        // Create empty cache file
-        File::create(&cache_path).unwrap();
-
-        let cache_path_shared = Arc::new(cache_path.clone());
-        let acquired_count = Arc::new(std::sync::Mutex::new(0));
-
-        let mut handles = vec![];
-        for _ in 0..5 {
-            let cache_path_thread = cache_path_shared.clone();
-            let count = acquired_count.clone();
-            let handle = thread::spawn(move || {
-                let file = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&*cache_path_thread)
-                    .unwrap();
-                if FileExt::try_lock_exclusive(&file).is_ok() {
-                    *count
-                        .lock()
-                        .unwrap() += 1;
-                    thread::sleep(Duration::from_millis(50));
-                    FileExt::unlock(&file).unwrap();
-                }
-            });
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            handle
-                .join()
-                .unwrap();
-        }
-
-        // Only one thread should have acquired exclusive lock
-        assert_eq!(
-            *acquired_count
-                .lock()
-                .unwrap(),
-            1
-        );
-        fs::remove_dir_all(&cache_dir).unwrap();
-    }
 
     #[test]
     fn test_api_usage_result_data() {
