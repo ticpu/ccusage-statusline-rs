@@ -100,21 +100,7 @@ cargo clippy --fix --allow-dirty --message-format=short
 cargo test --release --message-format=short
 ```
 
-**Version management** (single source of truth in `Cargo.toml`):
-```bash
-# 1. Edit Cargo.toml version
-# 2. cargo fmt && cargo clippy --fix --allow-dirty
-# 3. git commit -m "chore: bump version to X.Y.Z"
-# 4. git push
-# 5. WAIT for CI to pass on master
-# 6. git tag -as vX.Y.Z -m "Release vX.Y.Z"
-# 7. git push --tags
-# 8. WAIT for Release workflow to complete successfully
-# 9. Update AUR package: cd ~/.cache/paru/clone/ccusage-statusline-rs/ && ./update-pkg.sh 2>&1 | grep -v Compiling
-#    (Should output the new version; only troubleshoot if it fails)
-```
-
-Both `PKGBUILD` and `Makefile` auto-extract version: `grep -Po '^version = "\K[^"]+' Cargo.toml`
+**Version management**: single source of truth in `Cargo.toml`; both `PKGBUILD` and `Makefile` auto-extract it (`grep -Po '^version = "\K[^"]+' Cargo.toml`). Release process: `/release` (`.claude/commands/release.md`).
 
 **CI/CD**:
 - `ci.yml`: Runs on master push/PR (format check, clippy, x86_64 build+test, aarch64 build)
