@@ -270,38 +270,12 @@ fn generate_statusline(
             | StatusElement::ApiMetricsSonnet => {
                 if !api_metrics_emitted {
                     api_metrics_emitted = true;
-                    if let Some(label) = api_result.error_label() {
-                        parts.push(format!("📊({})", label));
-                    } else {
-                        let enabled = &statusline_config.enabled_elements;
-                        let mut api_parts = Vec::new();
-
-                        if enabled.contains(&StatusElement::ApiMetrics5h)
-                            && let Some(text) = format_api_usage_5h(api_usage.as_ref())
-                        {
-                            api_parts.push(format!("📊{}", text));
-                        }
-                        if enabled.contains(&StatusElement::ApiMetrics7d)
-                            && let Some(text) = format_api_usage_7d(api_usage.as_ref())
-                        {
-                            if api_parts.is_empty() {
-                                api_parts.push(format!("📊{}", text));
-                            } else {
-                                api_parts.push(text);
-                            }
-                        }
-                        if enabled.contains(&StatusElement::ApiMetricsSonnet)
-                            && let Some(text) = format_api_usage_sonnet(api_usage.as_ref())
-                        {
-                            if api_parts.is_empty() {
-                                api_parts.push(format!("📊{}", text));
-                            } else {
-                                api_parts.push(text);
-                            }
-                        }
-                        if !api_parts.is_empty() {
-                            parts.push(api_parts.join(" "));
-                        }
+                    if let Some(s) = format_api_metrics_group(
+                        &statusline_config.enabled_elements,
+                        api_result.error_label(),
+                        api_usage.as_ref(),
+                    ) {
+                        parts.push(s);
                     }
                 }
             }

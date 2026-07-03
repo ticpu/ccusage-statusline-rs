@@ -1,4 +1,4 @@
-use crate::config::Thresholds;
+use crate::config::{StatusElement, Thresholds};
 use crate::types::{ApiUsageData, Block, BurnRate, ContextInfo, LimitType, PlanType};
 use chrono::{Duration, Utc};
 use owo_colors::OwoColorize;
@@ -356,6 +356,50 @@ pub fn format_api_usage_sonnet(api_usage: Option<&ApiUsageData>) -> Option<Strin
     api_usage
         .and_then(|a| a.seven_day_sonnet)
         .map(|pct| format!("S7d:{}%", pct as u32))
+}
+
+/// Format the API metrics group; manages the 📊 prefix and enabled-element filtering.
+/// Returns None when no element has data to show.
+pub fn format_api_metrics_group(
+    enabled: &[StatusElement],
+    error_label: Option<&'static str>,
+    api_usage: Option<&ApiUsageData>,
+) -> Option<String> {
+    if let Some(label) = error_label {
+        return Some(format!("📊({})", label));
+    }
+
+    let mut api_parts: Vec<String> = Vec::new();
+
+    if enabled.contains(&StatusElement::ApiMetrics5h)
+        && let Some(text) = format_api_usage_5h(api_usage)
+    {
+        api_parts.push(format!("📊{}", text));
+    }
+    if enabled.contains(&StatusElement::ApiMetrics7d)
+        && let Some(text) = format_api_usage_7d(api_usage)
+    {
+        if api_parts.is_empty() {
+            api_parts.push(format!("📊{}", text));
+        } else {
+            api_parts.push(text);
+        }
+    }
+    if enabled.contains(&StatusElement::ApiMetricsSonnet)
+        && let Some(text) = format_api_usage_sonnet(api_usage)
+    {
+        if api_parts.is_empty() {
+            api_parts.push(format!("📊{}", text));
+        } else {
+            api_parts.push(text);
+        }
+    }
+
+    if api_parts.is_empty() {
+        None
+    } else {
+        Some(api_parts.join(" "))
+    }
 }
 
 pub fn strip_emojis(s: &str) -> String {
