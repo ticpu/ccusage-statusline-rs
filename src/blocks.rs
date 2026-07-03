@@ -21,87 +21,64 @@ fn floor_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(timestamp)
 }
 
-/// Group usage entries into blocks (matching TypeScript logic)
-pub fn group_into_blocks(entries: &[UsageData], pricing: &PricingFetcher) -> Result<Vec<Block>> {
-    if entries.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let session_duration_ms = BLOCK_DURATION_HOURS * 60 * 60 * 1000; // Block duration in milliseconds
+/// Group pre-parsed, sorted usage entries into 5-hour billing blocks.
+pub fn group_into_blocks(
+    entries: &[(DateTime<Utc>, UsageData)],
+    pricing: &PricingFetcher,
+) -> Vec<Block> {
+    let session_duration_ms = BLOCK_DURATION_HOURS * 60 * 60 * 1000;
     let mut blocks = Vec::new();
-    let mut current_block_start: Option<DateTime<Utc>> = None;
-    let mut current_block_entries: Vec<&UsageData> = Vec::new();
+    // (floored block start, last entry time)
+    let mut current_span: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
+    let mut block_entries: Vec<&UsageData> = Vec::new();
     let now = Utc::now();
 
-    for entry in entries {
-        let entry_time = DateTime::parse_from_rfc3339(&entry.timestamp)?;
-        let entry_time = entry_time.with_timezone(&Utc);
+    for (entry_time, entry) in entries {
+        let entry_time = *entry_time;
 
-        match current_block_start {
-            None => {
-                // First entry - floor to hour
-                current_block_start = Some(floor_to_hour(entry_time));
-                current_block_entries = vec![entry];
+        if let Some((start, last_time)) = current_span {
+            let time_since_start = entry_time.timestamp_millis() - start.timestamp_millis();
+            let time_since_last = entry_time.timestamp_millis() - last_time.timestamp_millis();
+
+            if time_since_start > session_duration_ms || time_since_last > session_duration_ms {
+                blocks.push(create_block_from_entries(
+                    start,
+                    last_time,
+                    &block_entries,
+                    now,
+                    session_duration_ms,
+                    pricing,
+                ));
+                current_span = Some((floor_to_hour(entry_time), entry_time));
+                block_entries = vec![entry];
+            } else {
+                current_span = Some((start, entry_time));
+                block_entries.push(entry);
             }
-            Some(start) => {
-                let time_since_block_start =
-                    entry_time.timestamp_millis() - start.timestamp_millis();
-                let last_entry = current_block_entries.last();
-
-                let should_close_block = if let Some(last) = last_entry {
-                    let last_time =
-                        DateTime::parse_from_rfc3339(&last.timestamp)?.with_timezone(&Utc);
-                    let time_since_last =
-                        entry_time.timestamp_millis() - last_time.timestamp_millis();
-
-                    time_since_block_start > session_duration_ms
-                        || time_since_last > session_duration_ms
-                } else {
-                    false
-                };
-
-                if should_close_block {
-                    // Close current block
-                    let block = create_block_from_entries(
-                        start,
-                        &current_block_entries,
-                        now,
-                        session_duration_ms,
-                        pricing,
-                    );
-                    blocks.push(block);
-
-                    // Start new block (floored to hour)
-                    current_block_start = Some(floor_to_hour(entry_time));
-                    current_block_entries = vec![entry];
-                } else {
-                    // Add to current block
-                    current_block_entries.push(entry);
-                }
-            }
+        } else {
+            current_span = Some((floor_to_hour(entry_time), entry_time));
+            block_entries = vec![entry];
         }
     }
 
-    // Close the last block
-    if let Some(start) = current_block_start
-        && !current_block_entries.is_empty()
-    {
-        let block = create_block_from_entries(
+    if let Some((start, last_time)) = current_span {
+        blocks.push(create_block_from_entries(
             start,
-            &current_block_entries,
+            last_time,
+            &block_entries,
             now,
             session_duration_ms,
             pricing,
-        );
-        blocks.push(block);
+        ));
     }
 
-    Ok(blocks)
+    blocks
 }
 
-/// Create a block from start time and entries (matching TypeScript logic)
+/// Create a block from start time, last-entry time, and entries (matching TypeScript logic).
 pub fn create_block_from_entries(
     start_time: DateTime<Utc>,
+    actual_end_time: DateTime<Utc>,
     entries: &[&UsageData],
     now: DateTime<Utc>,
     session_duration_ms: i64,
@@ -109,18 +86,10 @@ pub fn create_block_from_entries(
 ) -> Block {
     let end_time = start_time + Duration::milliseconds(session_duration_ms);
 
-    // Find actual end time (last entry timestamp)
-    let actual_end_time = entries
-        .last()
-        .and_then(|e| DateTime::parse_from_rfc3339(&e.timestamp).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or(start_time);
-
     // TypeScript logic: isActive = now - actualEndTime < sessionDuration && now < endTime
     let time_since_last_activity = now.timestamp_millis() - actual_end_time.timestamp_millis();
     let is_active = time_since_last_activity < session_duration_ms && now < end_time;
 
-    // Calculate hours remaining if active
     let hours_remaining = if is_active {
         let remaining = (end_time - now).num_seconds() as f64 / 3600.0;
         Some(remaining.max(0.0))
@@ -144,7 +113,7 @@ pub fn create_block_from_entries(
 
 /// Find active billing block
 pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> Result<Block> {
-    let mut all_entries = Vec::with_capacity(1000);
+    let mut all_entries: Vec<UsageData> = Vec::with_capacity(1000);
     let mut processed_hashes: HashSet<String> = HashSet::with_capacity(1000);
 
     let now = Utc::now();
@@ -194,12 +163,18 @@ pub fn find_active_block(claude_paths: &[PathBuf], pricing: &PricingFetcher) -> 
         }
     }
 
-    all_entries.sort_by(|a, b| {
-        a.timestamp
-            .cmp(&b.timestamp)
-    });
+    // Parse each timestamp once; skip entries whose timestamps are unparseable
+    let mut parsed: Vec<(DateTime<Utc>, UsageData)> = all_entries
+        .into_iter()
+        .filter_map(|e| {
+            DateTime::parse_from_rfc3339(&e.timestamp)
+                .ok()
+                .map(|dt| (dt.with_timezone(&Utc), e))
+        })
+        .collect();
+    parsed.sort_by_key(|(dt, _)| *dt);
 
-    let blocks = group_into_blocks(&all_entries, pricing)?;
+    let blocks = group_into_blocks(&parsed, pricing);
 
     let now = Utc::now();
     for block in blocks
