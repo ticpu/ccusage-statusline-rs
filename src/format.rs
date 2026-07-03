@@ -151,26 +151,49 @@ fn colorize_by_threshold(s: &str, value: f64, warning: f64, danger: f64) -> Stri
     }
 }
 
+/// Controls what the burn rate component renders; the (false, false) dead combo is unrepresentable
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BurnRateDisplay {
+    Rate,
+    RateWithEta,
+    EtaOnly,
+}
+
+impl BurnRateDisplay {
+    /// Map (has_rate, has_eta) enabled-element flags to the display mode, or None if both off
+    pub fn from_elements(has_rate: bool, has_eta: bool) -> Option<Self> {
+        match (has_rate, has_eta) {
+            (true, true) => Some(Self::RateWithEta),
+            (true, false) => Some(Self::Rate),
+            (false, true) => Some(Self::EtaOnly),
+            (false, false) => None,
+        }
+    }
+}
+
 /// Unified entry point for all burn rate display modes
 pub fn format_burn_rate_component(
     burn_rate: &BurnRate,
     plan_type: PlanType,
-    show_rate: bool,
-    show_eta: bool,
+    display: BurnRateDisplay,
     thresholds: &Thresholds,
 ) -> Option<String> {
-    if !show_rate && !show_eta {
-        return None;
-    }
-
-    let eta = show_eta && matches!(plan_type, PlanType::Subscription);
-
-    if show_rate {
-        Some(format_rate_display(burn_rate, plan_type, eta, thresholds))
-    } else if eta {
-        format_eta_only(burn_rate, thresholds)
-    } else {
-        None
+    let is_subscription = matches!(plan_type, PlanType::Subscription);
+    match display {
+        BurnRateDisplay::Rate => Some(format_rate_display(burn_rate, plan_type, false, thresholds)),
+        BurnRateDisplay::RateWithEta => Some(format_rate_display(
+            burn_rate,
+            plan_type,
+            is_subscription,
+            thresholds,
+        )),
+        BurnRateDisplay::EtaOnly => {
+            if is_subscription {
+                format_eta_only(burn_rate, thresholds)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -496,11 +519,16 @@ mod tests {
         };
         let t = default_thresholds();
         let rate_api =
-            format_burn_rate_component(&safe_burn, PlanType::Api, true, false, &t).unwrap();
-        assert!(rate_api.contains("$1.50/h"));
-        let rate_sub =
-            format_burn_rate_component(&safe_burn, PlanType::Subscription, true, false, &t)
+            format_burn_rate_component(&safe_burn, PlanType::Api, BurnRateDisplay::Rate, &t)
                 .unwrap();
+        assert!(rate_api.contains("$1.50/h"));
+        let rate_sub = format_burn_rate_component(
+            &safe_burn,
+            PlanType::Subscription,
+            BurnRateDisplay::Rate,
+            &t,
+        )
+        .unwrap();
         assert!(rate_sub.contains("50%"));
 
         let warning_burn = BurnRate {
@@ -510,7 +538,8 @@ mod tests {
             ..Default::default()
         };
         let warn =
-            format_burn_rate_component(&warning_burn, PlanType::Api, true, false, &t).unwrap();
+            format_burn_rate_component(&warning_burn, PlanType::Api, BurnRateDisplay::Rate, &t)
+                .unwrap();
         assert!(warn.contains("$10.00/h"));
         assert!(warn.contains("5h"));
 
@@ -520,9 +549,13 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             ..Default::default()
         };
-        let danger =
-            format_burn_rate_component(&danger_burn, PlanType::Subscription, true, false, &t)
-                .unwrap();
+        let danger = format_burn_rate_component(
+            &danger_burn,
+            PlanType::Subscription,
+            BurnRateDisplay::Rate,
+            &t,
+        )
+        .unwrap();
         assert!(danger.contains("140%"));
         assert!(danger.contains("5h"));
     }
@@ -537,9 +570,13 @@ mod tests {
             ..Default::default()
         };
         let t = default_thresholds();
-        let result =
-            format_burn_rate_component(&burn_with_7d, PlanType::Subscription, true, false, &t)
-                .unwrap();
+        let result = format_burn_rate_component(
+            &burn_with_7d,
+            PlanType::Subscription,
+            BurnRateDisplay::Rate,
+            &t,
+        )
+        .unwrap();
         assert!(result.contains("50%"));
         assert!(result.contains("5h"));
         assert!(result.contains("110%"));
@@ -552,9 +589,13 @@ mod tests {
             critical_limit: LimitType::SevenDay,
             ..Default::default()
         };
-        let result =
-            format_burn_rate_component(&burn_7d_critical, PlanType::Subscription, true, false, &t)
-                .unwrap();
+        let result = format_burn_rate_component(
+            &burn_7d_critical,
+            PlanType::Subscription,
+            BurnRateDisplay::Rate,
+            &t,
+        )
+        .unwrap();
         assert!(result.contains("110%"));
         assert!(result.contains(" 7d"));
         assert_eq!(
@@ -576,7 +617,8 @@ mod tests {
         };
         let t = default_thresholds();
         let result =
-            format_burn_rate_component(&burn, PlanType::Subscription, true, false, &t).unwrap();
+            format_burn_rate_component(&burn, PlanType::Subscription, BurnRateDisplay::Rate, &t)
+                .unwrap();
         assert_eq!(
             result
                 .matches('%')
@@ -801,8 +843,7 @@ mod tests {
         let result = format_burn_rate_component(
             &burn,
             PlanType::Subscription,
-            false,
-            true,
+            BurnRateDisplay::EtaOnly,
             &default_thresholds(),
         );
         assert!(
@@ -837,23 +878,7 @@ mod tests {
 
     #[test]
     fn test_both_false_returns_none() {
-        let burn = BurnRate {
-            ratio: 1.4,
-            seven_day_ratio: 0.5,
-            critical_limit: LimitType::FiveHour,
-            reset_in: Some(Duration::hours(3)),
-            ..Default::default()
-        };
-        assert!(
-            format_burn_rate_component(
-                &burn,
-                PlanType::Subscription,
-                false,
-                false,
-                &default_thresholds()
-            )
-            .is_none()
-        );
+        assert!(BurnRateDisplay::from_elements(false, false).is_none());
     }
 
     // --- format_eta unit tests ---
@@ -900,14 +925,11 @@ mod tests {
         show_rate: bool,
         show_eta: bool,
     ) -> String {
-        let result = format_burn_rate_component(
-            burn_rate,
-            plan_type,
-            show_rate,
-            show_eta,
-            &default_thresholds(),
-        )
-        .unwrap_or_default();
+        let display = BurnRateDisplay::from_elements(show_rate, show_eta)
+            .expect("invalid (false, false) combo in test");
+        let result =
+            format_burn_rate_component(burn_rate, plan_type, display, &default_thresholds())
+                .unwrap_or_default();
         eprintln!("  {}", result);
         result
     }

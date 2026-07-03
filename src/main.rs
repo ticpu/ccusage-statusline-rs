@@ -251,11 +251,13 @@ fn generate_statusline(
                 if !burn_rate_emitted {
                     burn_rate_emitted = true;
                     let enabled = &statusline_config.enabled_elements;
-                    let show_rate = enabled.contains(&StatusElement::BurnRate);
-                    let show_eta = enabled.contains(&StatusElement::BurnRateEta);
-                    if let Some(s) = format_burn_rate_component(
-                        &burn_rate, plan_type, show_rate, show_eta, thresholds,
-                    ) {
+                    let has_rate = enabled.contains(&StatusElement::BurnRate);
+                    let has_eta = enabled.contains(&StatusElement::BurnRateEta);
+                    if let Some(s) =
+                        BurnRateDisplay::from_elements(has_rate, has_eta).and_then(|display| {
+                            format_burn_rate_component(&burn_rate, plan_type, display, thresholds)
+                        })
+                    {
                         parts.push(s);
                     }
                 }
