@@ -1,10 +1,11 @@
 use crate::paths::claude_config_dir;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use inquire::ui::{RenderConfig, Styled};
 use inquire::{CustomType, MultiSelect, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -240,8 +241,30 @@ impl StatuslineConfig {
         }
 
         let content = fs::read_to_string(&path)?;
-        let config: Self = serde_json::from_str(&content)?;
-        Ok(config)
+        match serde_json::from_str::<Self>(&content) {
+            Ok(config) => Ok(config),
+            Err(e) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("Config parse error ({}): {}", path.display(), e);
+                }
+                Ok(Self::default())
+            }
+        }
+    }
+
+    /// Like `load()` but propagates parse errors; used in interactive menu where
+    /// proceeding with defaults on a corrupt config would silently overwrite it.
+    fn load_strict() -> Result<Self> {
+        let path = Self::config_path()?;
+
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        serde_json::from_str(&content)
+            .with_context(|| format!("{} is invalid JSON; fix or delete it", path.display()))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -280,47 +303,12 @@ impl fmt::Display for MainMenu {
     }
 }
 
-enum ThresholdMenu {
-    BurnRateShow(u32),
-    BurnRateWarning(u32),
-    BurnRateDanger(u32),
-    ContextWarning(u32),
-    ContextDanger(u32),
-    Back,
-}
-
-impl fmt::Display for ThresholdMenu {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::BurnRateShow(v) => {
-                write!(
-                    f,
-                    "Burn rate visibility    {v}%  (show burn rate above this)"
-                )
-            }
-            Self::BurnRateWarning(v) => {
-                write!(f, "Burn rate warning       {v}%  (yellow color threshold)")
-            }
-            Self::BurnRateDanger(v) => {
-                write!(f, "Burn rate danger       {v}%  (red color threshold)")
-            }
-            Self::ContextWarning(v) => {
-                write!(f, "Context warning         {v}%  (yellow color threshold)")
-            }
-            Self::ContextDanger(v) => {
-                write!(f, "Context danger          {v}%  (red color threshold)")
-            }
-            Self::Back => write!(f, "Back"),
-        }
-    }
-}
-
 pub fn run_config_menu() -> Result<()> {
     inquire::set_global_render_config(
         RenderConfig::default_colored().with_canceled_prompt_indicator(Styled::new("")),
     );
 
-    let mut config = StatuslineConfig::load().unwrap_or_default();
+    let mut config = StatuslineConfig::load_strict()?;
 
     loop {
         let menu = vec![
@@ -407,57 +395,94 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
 }
 
 fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
-    loop {
-        let menu = vec![
-            ThresholdMenu::BurnRateShow(thresholds.burn_rate_show),
-            ThresholdMenu::BurnRateWarning(thresholds.burn_rate_warning),
-            ThresholdMenu::BurnRateDanger(thresholds.burn_rate_danger),
-            ThresholdMenu::ContextWarning(thresholds.context_warning),
-            ThresholdMenu::ContextDanger(thresholds.context_danger),
-            ThresholdMenu::Back,
-        ];
+    struct Entry {
+        display: fn(&Thresholds) -> String,
+        prompt: &'static str,
+        get: fn(&Thresholds) -> u32,
+        set: fn(&mut Thresholds, u32),
+    }
 
-        let Some(choice) = Select::new("Thresholds:", menu).prompt_skippable()? else {
+    let entries: &[Entry] = &[
+        Entry {
+            display: |t| {
+                format!(
+                    "Burn rate visibility    {}%  (show burn rate above this)",
+                    t.burn_rate_show
+                )
+            },
+            prompt: "Burn rate visibility % (0-100):",
+            get: |t| t.burn_rate_show,
+            set: |t, v| t.burn_rate_show = v,
+        },
+        Entry {
+            display: |t| {
+                format!(
+                    "Burn rate warning       {}%  (yellow color threshold)",
+                    t.burn_rate_warning
+                )
+            },
+            prompt: "Burn rate warning % (0-100):",
+            get: |t| t.burn_rate_warning,
+            set: |t, v| t.burn_rate_warning = v,
+        },
+        Entry {
+            display: |t| {
+                format!(
+                    "Burn rate danger       {}%  (red color threshold)",
+                    t.burn_rate_danger
+                )
+            },
+            prompt: "Burn rate danger % (0-200):",
+            get: |t| t.burn_rate_danger,
+            set: |t, v| t.burn_rate_danger = v,
+        },
+        Entry {
+            display: |t| {
+                format!(
+                    "Context warning         {}%  (yellow color threshold)",
+                    t.context_warning
+                )
+            },
+            prompt: "Context warning % (0-100):",
+            get: |t| t.context_warning,
+            set: |t, v| t.context_warning = v,
+        },
+        Entry {
+            display: |t| {
+                format!(
+                    "Context danger          {}%  (red color threshold)",
+                    t.context_danger
+                )
+            },
+            prompt: "Context danger % (0-100):",
+            get: |t| t.context_danger,
+            set: |t, v| t.context_danger = v,
+        },
+    ];
+
+    loop {
+        let mut options: Vec<String> = entries
+            .iter()
+            .map(|e| (e.display)(thresholds))
+            .collect();
+        options.push("Back".to_string());
+
+        let Some(choice) = Select::new("Thresholds:", options).prompt_skippable()? else {
             break;
         };
 
-        match choice {
-            ThresholdMenu::BurnRateShow(_) => {
-                if let Some(v) =
-                    prompt_threshold("Burn rate visibility % (0-100):", thresholds.burn_rate_show)?
-                {
-                    thresholds.burn_rate_show = v;
-                }
+        if choice == "Back" {
+            break;
+        }
+
+        if let Some(entry) = entries
+            .iter()
+            .find(|e| (e.display)(thresholds) == choice)
+        {
+            let current = (entry.get)(thresholds);
+            if let Some(v) = prompt_threshold(entry.prompt, current)? {
+                (entry.set)(thresholds, v);
             }
-            ThresholdMenu::BurnRateWarning(_) => {
-                if let Some(v) =
-                    prompt_threshold("Burn rate warning % (0-100):", thresholds.burn_rate_warning)?
-                {
-                    thresholds.burn_rate_warning = v;
-                }
-            }
-            ThresholdMenu::BurnRateDanger(_) => {
-                if let Some(v) =
-                    prompt_threshold("Burn rate danger % (0-200):", thresholds.burn_rate_danger)?
-                {
-                    thresholds.burn_rate_danger = v;
-                }
-            }
-            ThresholdMenu::ContextWarning(_) => {
-                if let Some(v) =
-                    prompt_threshold("Context warning % (0-100):", thresholds.context_warning)?
-                {
-                    thresholds.context_warning = v;
-                }
-            }
-            ThresholdMenu::ContextDanger(_) => {
-                if let Some(v) =
-                    prompt_threshold("Context danger % (0-100):", thresholds.context_danger)?
-                {
-                    thresholds.context_danger = v;
-                }
-            }
-            ThresholdMenu::Back => break,
         }
     }
 

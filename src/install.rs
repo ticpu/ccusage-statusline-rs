@@ -33,7 +33,7 @@ pub fn install() -> Result<()> {
         );
     }
 
-    let settings_path = config_dir.join("settings.json");
+    let settings_path = get_settings_path()?;
 
     let mut settings: Value = if settings_path.exists() {
         let content = fs::read_to_string(&settings_path).context("Failed to read settings file")?;
@@ -55,10 +55,8 @@ pub fn install() -> Result<()> {
         }
     }
 
-    // Get the current binary path. Claude Code invokes statusLine via Git Bash on
-    // Windows: backslashes are escape chars and \\?\/UNC prefixes are unrunnable.
-    // dunce::simplified strips verbatim prefixes when safe; path-slash converts
-    // separators. Both are no-ops on Unix.
+    // On Windows, Git Bash can't handle verbatim/UNC prefixes or backslashes.
+    // dunce::simplified and path-slash normalize these; both are no-ops on Unix.
     let binary_path =
         std::env::current_exe().context("Failed to determine current executable path")?;
     let binary_path_str = dunce::simplified(&binary_path)
