@@ -117,58 +117,20 @@ fn run_piped_mode() -> Result<()> {
 }
 
 fn run_interactive_mode() -> Result<()> {
-    let cache_dir = get_cache_dir()?;
-    fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
-
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
-    let thresholds = &statusline_config.thresholds;
-    let plan_type = api_usage::get_plan_type();
-    let api_result = if statusline_config.needs_api() {
-        api_usage::fetch_usage(&statusline_config.cache)
-    } else {
-        api_usage::ApiUsageResult::Unavailable
+    let hook_data = HookData {
+        session_id: String::new(),
+        transcript_path: String::new(),
+        model: types::ModelInfo {
+            id: None,
+            display_name: String::new(),
+        },
+        workspace: None,
+        context_window: None,
+        rate_limits: None,
     };
-    let api_usage = api_result
-        .data()
-        .cloned();
-
-    let pricing = PricingFetcher::new(&cache_dir)?;
-    let claude_paths = find_claude_paths()?;
-    let block = find_active_block(&claude_paths, &pricing)?;
-    let burn_rate = calculate_burn_rate(
-        &block,
-        api_usage.as_ref(),
-        thresholds.burn_rate_show_ratio(),
-    )?;
-
-    let mut parts = Vec::new();
-
-    parts.push(format!("💰{}", format_block_info(&block)));
-
-    if let Some(time) = format_time_remaining_5h(&block, api_usage.as_ref(), plan_type) {
-        parts.push(time);
-    }
-
-    if let Some(s) = format_burn_rate_component(&burn_rate, plan_type, true, false, thresholds) {
-        parts.push(s);
-    }
-
-    if let Some(label) = api_result.error_label() {
-        parts.push(format!("📊({})", label));
-    } else if let Some(api) = format_api_usage_5h(api_usage.as_ref()) {
-        parts.push(format!("📊{}", api));
-        if let Some(api) = format_api_usage_7d(api_usage.as_ref()) {
-            parts.push(api);
-        }
-    }
-
-    let output = parts.join(" │ ");
-    if statusline_config.show_emojis {
-        println!("{}", output);
-    } else {
-        println!("{}", strip_emojis(&output));
-    }
-
+    let output = generate_statusline(&hook_data, &statusline_config)?;
+    println!("{}", output);
     Ok(())
 }
 
@@ -267,7 +229,9 @@ fn generate_statusline(
                     .model
                     .display_name
                     .replace(" context)", ")");
-                parts.push(format!("🤖{}", name));
+                if !name.is_empty() {
+                    parts.push(format!("🤖{}", name));
+                }
             }
             StatusElement::BlockCost => {
                 parts.push(format!("💰{}", format_block_info(&block)));
@@ -297,10 +261,9 @@ fn generate_statusline(
                 }
             }
             StatusElement::Context => {
-                parts.push(format!(
-                    "🧠{}",
-                    format_context(context_info.as_ref(), thresholds)
-                ));
+                if let Some(ctx) = context_info.as_ref() {
+                    parts.push(format!("🧠{}", format_context(Some(ctx), thresholds)));
+                }
             }
             StatusElement::ApiMetrics5h
             | StatusElement::ApiMetrics7d
