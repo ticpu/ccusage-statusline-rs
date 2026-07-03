@@ -9,7 +9,7 @@ license=('MIT')
 depends=('gcc-libs')
 makedepends=('cargo')
 options=('!lto')
-source=("$pkgname-$pkgver.tar.xz::https://github.com/ticpu/$pkgname/archive/v$pkgver.tar.xz")
+source=("https://github.com/ticpu/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz")
 sha256sums=('SKIP')
 
 build() {
