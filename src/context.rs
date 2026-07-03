@@ -1,14 +1,26 @@
 use crate::{
     paths::claude_config_json_path,
-    types::{ClaudeConfig, ContextInfo, ContextWindowData, HookData, UsageData},
+    types::{ContextInfo, ContextWindowData, HookData, UsageData},
 };
 use anyhow::Result;
+use serde::Deserialize;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, IsTerminal};
 
 const COMPACTED_CONTEXT_LIMIT: u64 = 155_000;
 const FULL_CONTEXT_LIMIT: u64 = 200_000;
 const EXTENDED_CONTEXT_LIMIT: u64 = 1_000_000;
+
+/// Claude configuration from ~/.claude.json
+#[derive(Debug, Deserialize)]
+struct ClaudeConfig {
+    #[serde(default = "default_auto_compact", rename = "autoCompactEnabled")]
+    auto_compact_enabled: bool,
+}
+
+fn default_auto_compact() -> bool {
+    true
+}
 
 pub fn calculate_context(hook_data: &HookData) -> Result<Option<ContextInfo>> {
     if let Some(cw) = &hook_data.context_window
@@ -30,7 +42,7 @@ fn context_from_window(cw: &ContextWindowData) -> Option<ContextInfo> {
     let pct = cw.used_percentage?;
 
     let tokens = if let Some(usage) = &cw.current_usage {
-        usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens
+        usage.context_tokens()
     } else {
         cw.total_input_tokens
             .unwrap_or(0)
@@ -124,19 +136,12 @@ fn calculate_context_from_transcript(
             continue;
         }
         if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
-            let context = entry
-                .message
-                .usage
-                .input_tokens
-                + entry
+            last_tokens = Some(
+                entry
                     .message
                     .usage
-                    .cache_creation_input_tokens
-                + entry
-                    .message
-                    .usage
-                    .cache_read_input_tokens;
-            last_tokens = Some(context);
+                    .context_tokens(),
+            );
         }
     }
 
@@ -153,7 +158,7 @@ fn calculate_context_from_transcript(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContextUsage, ModelInfo};
+    use crate::types::{ModelInfo, UsageTokens};
     use std::fs;
     use std::io::Write;
 
@@ -174,11 +179,13 @@ mod tests {
 
     #[test]
     fn test_context_from_window_1m() {
+        use crate::types::ContextWindowData;
         let cw = ContextWindowData {
             used_percentage: Some(4.2),
             total_input_tokens: Some(42_000),
-            current_usage: Some(ContextUsage {
+            current_usage: Some(UsageTokens {
                 input_tokens: 8_500,
+                output_tokens: 0,
                 cache_creation_input_tokens: 5_000,
                 cache_read_input_tokens: 2_000,
             }),
@@ -190,6 +197,7 @@ mod tests {
 
     #[test]
     fn test_context_from_window_200k() {
+        use crate::types::ContextWindowData;
         let cw = ContextWindowData {
             used_percentage: Some(47.5),
             total_input_tokens: Some(95_000),
@@ -202,6 +210,7 @@ mod tests {
 
     #[test]
     fn test_context_from_window_no_percentage() {
+        use crate::types::ContextWindowData;
         let cw = ContextWindowData {
             used_percentage: None,
             total_input_tokens: Some(42_000),
@@ -212,6 +221,7 @@ mod tests {
 
     #[test]
     fn test_context_from_window_defaults() {
+        use crate::types::ContextWindowData;
         let cw = ContextWindowData {
             used_percentage: Some(10.0),
             total_input_tokens: None,
@@ -238,6 +248,7 @@ mod tests {
 
     #[test]
     fn test_calculate_context_uses_window_data() {
+        use crate::types::{ContextWindowData, HookData};
         let hook = HookData {
             session_id: "test".into(),
             transcript_path: "/nonexistent".into(),
