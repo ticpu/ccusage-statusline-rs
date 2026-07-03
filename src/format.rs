@@ -362,7 +362,9 @@ pub fn strip_emojis(s: &str) -> String {
     s.chars()
         .filter(|c| {
             let cp = *c as u32;
-            !(0x1F300..=0x1FAFF).contains(&cp) && cp != 0x200B
+            // Strip: Miscellaneous/supplemental emoji blocks, ZWSP separator, and ⏱ (U+23F1)
+            // which falls outside the main emoji range but is emitted by burn-rate and ETA formatters
+            !(0x1F300..=0x1FAFF).contains(&cp) && cp != 0x200B && cp != 0x23F1
         })
         .collect()
 }
@@ -838,6 +840,10 @@ mod tests {
         assert_eq!(strip_emojis("📊5h:37%▅"), "5h:37%▅");
         assert_eq!(strip_emojis("🔥\u{200B}50% 5h"), "50% 5h");
         assert_eq!(strip_emojis("no emojis here"), "no emojis here");
+        // ⏱ (U+23F1) is outside the main emoji range but is emitted by ETA formatters
+        assert_eq!(strip_emojis("⏱\u{200B}2h 5h"), "2h 5h");
+        // │ separator (U+2502) must not be stripped
+        assert_eq!(strip_emojis("a │ b"), "a │ b");
     }
 
     fn default_thresholds() -> Thresholds {
