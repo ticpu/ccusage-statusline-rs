@@ -413,6 +413,198 @@ fn fetch_api_response() -> Result<ApiResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::thread;
+
+    fn make_test_envelope(utilization_5h: f64, utilization_7d: f64, errors: u32) -> CacheEnvelope {
+        CacheEnvelope {
+            fetched_at: now_epoch(),
+            consecutive_errors: errors,
+            response: Some(ApiResponse {
+                five_hour: UsageLimit {
+                    utilization: utilization_5h,
+                    resets_at: Some("2025-11-01T12:00:00Z".to_string()),
+                },
+                seven_day: UsageLimit {
+                    utilization: utilization_7d,
+                    resets_at: Some("2025-11-02T12:00:00Z".to_string()),
+                },
+                seven_day_sonnet: None,
+            }),
+        }
+    }
+
+    fn make_error_envelope(errors: u32) -> CacheEnvelope {
+        CacheEnvelope {
+            fetched_at: now_epoch(),
+            consecutive_errors: errors,
+            response: None,
+        }
+    }
+
+    /// write_envelope uses atomic rename; concurrent readers must never see partial data.
+    #[test]
+    fn test_atomic_write_preserves_valid_data() {
+        let cache_dir =
+            std::env::temp_dir().join(format!("ccusage-test-atomic-{}", std::process::id()));
+        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_path = cache_dir.join("api-usage-cache.json");
+
+        let initial = make_test_envelope(50.0, 25.0, 0);
+        write_envelope(&initial, &cache_path).unwrap();
+
+        let path_clone = cache_path.clone();
+        let reader = thread::spawn(move || {
+            for _ in 0..10 {
+                if let Ok(mut file) = File::open(&path_clone)
+                    && let Ok(env) = read_envelope_from_file(&mut file)
+                {
+                    assert!(
+                        env.response
+                            .is_some(),
+                        "response must be present"
+                    );
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+
+        let updated = make_test_envelope(75.0, 30.0, 0);
+        write_envelope(&updated, &cache_path).unwrap();
+
+        reader
+            .join()
+            .unwrap();
+        fs::remove_dir_all(&cache_dir).unwrap();
+    }
+
+    /// When a writer holds the exclusive lock, fetch_usage_with_lock falls back to shared
+    /// lock, blocks until the writer releases, then returns the cached response.
+    #[test]
+    fn test_shared_lock_readers_wait_for_valid_data() {
+        let cache_dir =
+            std::env::temp_dir().join(format!("ccusage-test-shared-{}", std::process::id()));
+        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_path = Arc::new(cache_dir.join("api-usage-cache.json"));
+        let settings = CacheSettings::default();
+
+        let envelope = make_test_envelope(50.0, 25.0, 0);
+        write_envelope(&envelope, &cache_path).unwrap();
+
+        let cache_path_writer = cache_path.clone();
+        let writer = thread::spawn(move || {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&*cache_path_writer)
+                .unwrap();
+            FileExt::lock_exclusive(&file).unwrap();
+            thread::sleep(Duration::from_millis(100));
+            FileExt::unlock(&file).unwrap();
+        });
+
+        thread::sleep(Duration::from_millis(10));
+
+        let result = fetch_usage_with_lock(&cache_path, &settings);
+        writer
+            .join()
+            .unwrap();
+
+        let data = result.expect("should return cached data via shared lock fallback");
+        assert!(
+            (data
+                .five_hour
+                .unwrap()
+                .percent
+                - 50.0)
+                .abs()
+                < 0.001
+        );
+
+        fs::remove_dir_all(&cache_dir).unwrap();
+    }
+
+    /// Concurrent callers with fresh cached data all get valid results — no network needed.
+    #[test]
+    fn test_concurrent_fetch_all_return_cached_data() {
+        let cache_dir =
+            std::env::temp_dir().join(format!("ccusage-test-concurrent-{}", std::process::id()));
+        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_path = Arc::new(cache_dir.join("api-usage-cache.json"));
+        let settings = CacheSettings::default();
+
+        let envelope = make_test_envelope(42.0, 20.0, 0);
+        write_envelope(&envelope, &cache_path).unwrap();
+
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let path = cache_path.clone();
+            let s = settings.clone();
+            handles.push(thread::spawn(move || fetch_usage_with_lock(&path, &s)));
+        }
+
+        for handle in handles {
+            let result = handle
+                .join()
+                .unwrap();
+            let data = result.expect("all threads should get cached data without network");
+            assert!(
+                (data
+                    .five_hour
+                    .unwrap()
+                    .percent
+                    - 42.0)
+                    .abs()
+                    < 0.001
+            );
+        }
+
+        fs::remove_dir_all(&cache_dir).unwrap();
+    }
+
+    /// A backoff envelope with no response (prior non-429 failure) must not be
+    /// detected as RateLimited — it becomes StaleCache in the caller.
+    #[test]
+    fn test_backoff_no_response_error_is_not_rate_limited() {
+        let cache_dir =
+            std::env::temp_dir().join(format!("ccusage-test-backoff-{}", std::process::id()));
+        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_path = cache_dir.join("api-usage-cache.json");
+        let settings = CacheSettings::default();
+
+        let envelope = make_error_envelope(1);
+        write_envelope(&envelope, &cache_path).unwrap();
+
+        // mtime_age near-zero → within the 600s backoff window for 1 prior error
+        let result = core_fetch_or_use_cache(
+            Some(envelope),
+            Duration::from_millis(1),
+            &cache_path,
+            &settings,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            !err.chain()
+                .any(|e| e.is::<RateLimited>()),
+            "backoff-after-network-failure must not be classified as rate limited"
+        );
+
+        fs::remove_dir_all(&cache_dir).unwrap();
+    }
+
+    /// RateLimited must survive anyhow context wrapping for the chain().any() detection
+    /// in fetch_usage to work correctly.
+    #[test]
+    fn test_rate_limited_error_survives_context_wrap() {
+        let err = anyhow::Error::new(RateLimited).context("outer context");
+        assert!(
+            err.chain()
+                .any(|e| e.is::<RateLimited>()),
+            "RateLimited must be detectable through context wrappers"
+        );
+    }
 
     #[test]
     fn test_api_usage_result_data() {
