@@ -2,7 +2,7 @@ use crate::types::{ModelPricing, PricingCache, TokenPrices, UsageData};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::collections::HashMap;
-use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
 
 /// Pricing fetcher with caching
@@ -24,49 +24,71 @@ impl PricingFetcher {
     fn load_pricing(cache_dir: &Path) -> Result<HashMap<String, ModelPricing>> {
         let pricing_cache_path = cache_dir.join("pricing.json");
 
-        // Check if cache exists and is fresh
-        if let Ok(cache_file) = fs::read_to_string(&pricing_cache_path)
-            && let Ok(cached) = serde_json::from_str::<PricingCache>(&cache_file)
-        {
-            let now = Utc::now().timestamp();
-            let age = now - cached.timestamp;
-
-            if age < Self::MAX_AGE_SECONDS {
-                return Ok(cached.models);
+        let cached: Option<PricingCache> = match crate::cache::read_json(&pricing_cache_path) {
+            Ok(v) => v,
+            Err(e) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("pricing cache read error: {:#}", e);
+                }
+                None
             }
+        };
+
+        // Determine freshness without consuming `cached`
+        let is_fresh = cached
+            .as_ref()
+            .map(|c| Utc::now().timestamp() - c.timestamp < Self::MAX_AGE_SECONDS)
+            .unwrap_or(false);
+
+        if is_fresh {
+            // Move out without clone — cached is consumed here
+            return Ok(cached
+                .unwrap()
+                .models);
         }
 
-        // Try to fetch fresh pricing
-        match reqwest::blocking::get(Self::LITELLM_URL) {
+        match crate::http::http_client()?
+            .get(Self::LITELLM_URL)
+            .send()
+        {
             Ok(response)
                 if response
                     .status()
                     .is_success() =>
             {
-                let models: HashMap<String, ModelPricing> = response
-                    .json()
-                    .context("Failed to parse pricing JSON")?;
-
-                // Cache the result
                 let cache = PricingCache {
                     timestamp: Utc::now().timestamp(),
-                    models: models.clone(),
+                    models: response
+                        .json()
+                        .context("Failed to parse pricing JSON")?,
                 };
-
-                if let Ok(cache_json) = serde_json::to_string_pretty(&cache) {
-                    let _ = fs::write(&pricing_cache_path, cache_json);
+                if let Err(e) = crate::cache::write_json_atomic(&pricing_cache_path, &cache)
+                    && std::io::stderr().is_terminal()
+                {
+                    eprintln!("pricing cache write failed: {:#}", e);
                 }
-
+                let PricingCache { models, .. } = cache;
                 Ok(models)
             }
-            _ => {
-                // Network error or bad response, try to use stale cache
-                if let Ok(cache_file) = fs::read_to_string(&pricing_cache_path)
-                    && let Ok(cached) = serde_json::from_str::<PricingCache>(&cache_file)
-                {
-                    return Ok(cached.models);
+            Ok(response) => {
+                let status = response.status();
+                if std::io::stderr().is_terminal() {
+                    eprintln!("pricing fetch failed (HTTP {}), using stale cache", status);
                 }
-                anyhow::bail!("Failed to fetch pricing and no cache available")
+                cached
+                    .map(|c| c.models)
+                    .context("Failed to fetch pricing data and no cache available")
+            }
+            Err(e) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("pricing fetch error, using stale cache: {:#}", e);
+                }
+                if let Some(c) = cached {
+                    Ok(c.models)
+                } else {
+                    Err(anyhow::Error::from(e))
+                        .context("Failed to fetch pricing and no cache available")
+                }
             }
         }
     }
@@ -117,7 +139,7 @@ impl PricingFetcher {
                     .usage,
             );
         }
-        // Fallback to hardcoded estimate if model not found
+        // Fallback to hardcoded estimate if model not found in LiteLLM
         estimate_cost_fallback(entry)
     }
 }

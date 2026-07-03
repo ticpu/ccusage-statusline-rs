@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::SystemTime;
 
 use crate::cache::get_cache_dir;
 
@@ -21,14 +20,7 @@ fn get_claude_binary_path() -> Option<PathBuf> {
 
 /// Get binary modification time as unix timestamp
 fn get_binary_mtime(path: &PathBuf) -> Option<u64> {
-    let metadata = fs::metadata(path).ok()?;
-    let mtime = metadata
-        .modified()
-        .ok()?;
-    mtime
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs())
+    crate::cache::path_mtime_secs(path).ok()
 }
 
 /// Get cached version if still valid (binary hasn't changed)
@@ -36,31 +28,49 @@ fn get_cached_version() -> Option<String> {
     let cache_dir = get_cache_dir().ok()?;
     let cache_path = cache_dir.join(VERSION_CACHE_FILE);
 
-    let contents = fs::read_to_string(&cache_path).ok()?;
-    let cache: VersionCache = serde_json::from_str(&contents).ok()?;
-
-    let binary_path = get_claude_binary_path()?;
-    let current_mtime = get_binary_mtime(&binary_path)?;
-
-    if cache.binary_mtime == current_mtime {
-        Some(cache.version)
-    } else {
-        None
+    match crate::cache::read_json::<VersionCache>(&cache_path) {
+        Ok(Some(cache)) => {
+            let binary_path = get_claude_binary_path()?;
+            let current_mtime = get_binary_mtime(&binary_path)?;
+            if cache.binary_mtime == current_mtime {
+                Some(cache.version)
+            } else {
+                None
+            }
+        }
+        Ok(None) => None,
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!("version cache read error: {:#}", e);
+            }
+            None
+        }
     }
 }
 
 /// Save version to cache
 fn save_version_cache(version: &str, mtime: u64) {
-    if let Ok(cache_dir) = get_cache_dir() {
-        let _ = fs::create_dir_all(&cache_dir);
-        let cache_path = cache_dir.join(VERSION_CACHE_FILE);
-        let cache = VersionCache {
-            version: version.to_string(),
-            binary_mtime: mtime,
-        };
-        if let Ok(contents) = serde_json::to_string(&cache) {
-            let _ = fs::write(cache_path, contents);
+    let cache_dir = match get_cache_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!("version cache: could not get cache dir: {:#}", e);
+            }
+            return;
         }
+    };
+    let cache_path = cache_dir.join(VERSION_CACHE_FILE);
+    let cache = VersionCache {
+        version: version.to_string(),
+        binary_mtime: mtime,
+    };
+    if let Err(e) = crate::cache::write_json_atomic(&cache_path, &cache)
+        && std::io::stderr().is_terminal()
+    {
+        eprintln!(
+            "version cache write failed (claude --version will run each invocation): {:#}",
+            e
+        );
     }
 }
 
@@ -131,7 +141,6 @@ mod tests {
 
     #[test]
     fn test_user_agent_format() {
-        // Test with known version
         let ua = format!("claude-code/{}", "2.0.71");
         assert!(ua.starts_with("claude-code/"));
         assert!(ua.contains('.'));

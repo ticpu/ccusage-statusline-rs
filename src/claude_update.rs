@@ -4,14 +4,13 @@ use crate::config::{StatusElement, StatuslineConfig};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
 const NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";
 const GCS_STABLE_URL: &str = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/stable";
 const UPDATE_CHECK_CACHE_TTL: Duration = Duration::from_secs(1800); // 30 minutes
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy)]
 enum VersionChannel {
@@ -49,15 +48,20 @@ fn get_cache_path(channel: VersionChannel) -> Result<PathBuf> {
 
 fn read_cache(channel: VersionChannel) -> Option<UpdateCache> {
     let cache_path = get_cache_path(channel).ok()?;
-    let contents = fs::read_to_string(cache_path).ok()?;
-    serde_json::from_str(&contents).ok()
+    match crate::cache::read_json::<UpdateCache>(&cache_path) {
+        Ok(v) => v,
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!("update cache read error: {:#}", e);
+            }
+            None
+        }
+    }
 }
 
 fn write_cache(channel: VersionChannel, cache: &UpdateCache) -> Result<()> {
     let cache_path = get_cache_path(channel)?;
-    let contents = serde_json::to_string(cache)?;
-    fs::write(cache_path, contents)?;
-    Ok(())
+    crate::cache::write_json_atomic(&cache_path, cache)
 }
 
 fn is_cache_fresh(cache: &UpdateCache) -> bool {
@@ -69,9 +73,7 @@ fn is_cache_fresh(cache: &UpdateCache) -> bool {
 }
 
 fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()?;
+    let client = crate::http::http_client()?;
 
     match channel {
         VersionChannel::Stable => {
@@ -173,8 +175,10 @@ pub fn check_update_available() -> Option<String> {
     // Cache miss or stale - fetch new data
     let latest_version = match fetch_latest_version(channel) {
         Ok(version) => Some(version),
-        Err(_) => {
-            // Fail silently, use old cache if available
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!("update check failed, using cached version: {:#}", e);
+            }
             read_cache(channel).and_then(|c| c.latest_version)
         }
     };
@@ -184,7 +188,11 @@ pub fn check_update_available() -> Option<String> {
         latest_version: latest_version.clone(),
         checked_at: Utc::now(),
     };
-    let _ = write_cache(channel, &new_cache);
+    if let Err(e) = write_cache(channel, &new_cache)
+        && std::io::stderr().is_terminal()
+    {
+        eprintln!("update cache write failed: {:#}", e);
+    }
 
     // Check if update available
     if let Some(ref latest) = latest_version

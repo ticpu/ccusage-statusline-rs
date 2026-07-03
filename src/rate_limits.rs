@@ -1,8 +1,7 @@
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, IsTerminal, Read};
 use std::path::PathBuf;
 
@@ -27,13 +26,12 @@ fn get_store_path() -> Result<PathBuf> {
     if let Ok(test_path) = std::env::var("CCUSAGE_TEST_STORE_PATH") {
         let path = PathBuf::from(test_path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent)?;
         }
         return Ok(path);
     }
 
     let cache_dir = get_cache_dir()?;
-    fs::create_dir_all(&cache_dir)?;
     Ok(cache_dir.join("rate-limits-latest.json"))
 }
 
@@ -71,7 +69,7 @@ fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
         .create(true)
         .open(&store_path)?;
 
-    file.lock_exclusive()?;
+    file.lock()?;
 
     let mut store: RateLimitsStore = if file
         .metadata()?
@@ -112,13 +110,10 @@ fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
     }
 
     if updated {
-        let temp_path = store_path.with_extension("tmp");
-        let json = serde_json::to_string(&store)?;
-        fs::write(&temp_path, json)?;
-        fs::rename(&temp_path, &store_path)?;
+        crate::cache::write_json_atomic(&store_path, &store)?;
     }
 
-    FileExt::unlock(&file)?;
+    file.unlock()?;
     Ok(())
 }
 
@@ -157,7 +152,7 @@ fn read_store() -> Result<RateLimitsStore> {
         }
     };
 
-    FileExt::unlock(&file)?;
+    file.unlock()?;
 
     let now = Utc::now();
 
@@ -276,6 +271,7 @@ fn merge_store_with_api_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::time::Duration;
 
     #[test]

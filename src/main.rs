@@ -7,6 +7,7 @@ mod claude_update;
 mod config;
 mod context;
 mod format;
+mod http;
 mod install;
 mod paths;
 mod pricing;
@@ -24,7 +25,7 @@ use format::*;
 use paths::{find_claude_paths, iter_jsonl_files};
 use pricing::PricingFetcher;
 use std::fs;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, ErrorKind, IsTerminal, Read};
 use types::HookData;
 
 #[derive(Parser)]
@@ -85,8 +86,6 @@ fn run_piped_mode() -> Result<()> {
     let hook_data: HookData = serde_json::from_str(&input).context("Failed to parse JSON input")?;
 
     let cache_dir = get_cache_dir()?;
-    fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
-
     let cache_path = cache_dir.join(format!("{}.lock", hook_data.session_id));
 
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
@@ -111,7 +110,21 @@ fn run_piped_mode() -> Result<()> {
     let output = generate_statusline(&hook_data, &statusline_config)?;
     println!("{}", output);
 
-    update_cache(&cache_path, &hook_data.transcript_path, &output)?;
+    // Cache update failure must not fail the process after output has been printed.
+    // A missing transcript is expected (e.g. session not yet written to disk).
+    if let Err(e) = update_cache(&cache_path, &hook_data.transcript_path, &output) {
+        let is_not_found = e
+            .chain()
+            .any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .map(|io| io.kind() == ErrorKind::NotFound)
+                    .unwrap_or(false)
+            });
+        if !is_not_found && std::io::stderr().is_terminal() {
+            eprintln!("Output cache update failed: {:#}", e);
+        }
+    }
 
     Ok(())
 }
@@ -186,8 +199,6 @@ fn generate_statusline(
     statusline_config: &config::StatuslineConfig,
 ) -> Result<String> {
     let cache_dir = get_cache_dir()?;
-    fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
-
     let plan_type = api_usage::get_plan_type();
     let thresholds = &statusline_config.thresholds;
     let api_result = if statusline_config.needs_api() {

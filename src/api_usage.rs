@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::cache::get_cache_dir;
@@ -94,7 +93,6 @@ impl ApiUsageResult {
 /// Get API cache file path
 fn get_api_cache_path() -> Result<PathBuf> {
     let cache_dir = get_cache_dir()?;
-    fs::create_dir_all(&cache_dir)?;
     Ok(cache_dir.join("api-usage-cache.json"))
 }
 
@@ -127,7 +125,15 @@ pub fn get_plan_type() -> PlanType {
             }
             _ => PlanType::Api,
         },
-        Err(_) => PlanType::Api,
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!(
+                    "get_plan_type: credentials unreadable, defaulting to Api: {:#}",
+                    e
+                );
+            }
+            PlanType::Api
+        }
     }
 }
 
@@ -166,7 +172,7 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
 }
 
 fn fetch_usage_with_lock(
-    cache_path: &PathBuf,
+    cache_path: &Path,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
     // Only open existing file — don't create an empty one
@@ -175,16 +181,16 @@ fn fetch_usage_with_lock(
         .write(true)
         .open(cache_path)
     {
-        Ok(mut file) => match file.try_lock_exclusive() {
+        Ok(mut file) => match file.try_lock() {
             Ok(()) => {
                 let result = fetch_or_use_cache(&mut file, cache_path, cache_settings);
-                FileExt::unlock(&file)?;
+                file.unlock()?;
                 result
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                FileExt::lock_shared(&file)?;
+            Err(TryLockError::WouldBlock) => {
+                file.lock_shared()?;
                 let result = read_envelope_from_file(&mut file);
-                FileExt::unlock(&file)?;
+                file.unlock()?;
                 let envelope =
                     result.context("Cache unavailable while another process is fetching")?;
                 let response = envelope
@@ -192,7 +198,7 @@ fn fetch_usage_with_lock(
                     .context("Cache has no response data yet")?;
                 Ok(parse_api_response(&response))
             }
-            Err(e) => Err(e.into()),
+            Err(TryLockError::Error(e)) => Err(e.into()),
         },
         Err(e) if e.kind() == ErrorKind::NotFound => {
             // No cache file — first run; share the same core as the exclusive-lock path
@@ -204,7 +210,7 @@ fn fetch_usage_with_lock(
 
 fn fetch_or_use_cache(
     file: &mut File,
-    cache_path: &PathBuf,
+    cache_path: &Path,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
     let metadata = file.metadata()?;
@@ -214,7 +220,15 @@ fn fetch_or_use_cache(
         .unwrap_or(Duration::from_secs(cache_settings.api_refresh_secs + 1));
 
     let existing = if metadata.len() > 0 {
-        read_envelope_from_file(file).ok()
+        match read_envelope_from_file(file) {
+            Ok(envelope) => Some(envelope),
+            Err(e) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("API cache parse error (treating as absent): {:#}", e);
+                }
+                None
+            }
+        }
     } else {
         None
     };
@@ -225,7 +239,7 @@ fn fetch_or_use_cache(
 fn core_fetch_or_use_cache(
     existing: Option<CacheEnvelope>,
     mtime_age: Duration,
-    cache_path: &PathBuf,
+    cache_path: &Path,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
     // Exponential backoff: min(refresh * 2^errors, max_backoff)
@@ -312,12 +326,8 @@ fn core_fetch_or_use_cache(
     }
 }
 
-fn write_envelope(envelope: &CacheEnvelope, cache_path: &PathBuf) -> Result<()> {
-    let temp_path = cache_path.with_extension("tmp");
-    let json = serde_json::to_string(envelope)?;
-    fs::write(&temp_path, json)?;
-    fs::rename(&temp_path, cache_path)?;
-    Ok(())
+fn write_envelope(envelope: &CacheEnvelope, cache_path: &Path) -> Result<()> {
+    crate::cache::write_json_atomic(cache_path, envelope)
 }
 
 fn now_epoch() -> u64 {
@@ -370,9 +380,7 @@ fn fetch_api_response() -> Result<ApiResponse> {
 
     let url = "https://api.anthropic.com/api/oauth/usage";
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    let client = crate::http::http_client()?;
 
     let response = client
         .get(url)
@@ -498,9 +506,12 @@ mod tests {
                 .write(true)
                 .open(&*cache_path_writer)
                 .unwrap();
-            FileExt::lock_exclusive(&file).unwrap();
+            // Holding an exclusive lock forces concurrent readers onto the shared-lock path
+            file.lock()
+                .unwrap();
             thread::sleep(Duration::from_millis(100));
-            FileExt::unlock(&file).unwrap();
+            file.unlock()
+                .unwrap();
         });
 
         thread::sleep(Duration::from_millis(10));
