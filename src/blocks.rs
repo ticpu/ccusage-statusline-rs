@@ -22,7 +22,7 @@ fn floor_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// Group pre-parsed, sorted usage entries into 5-hour billing blocks.
-pub fn group_into_blocks(
+fn group_into_blocks(
     entries: &[(DateTime<Utc>, UsageData)],
     pricing: &PricingFetcher,
 ) -> Vec<Block> {
@@ -76,7 +76,7 @@ pub fn group_into_blocks(
 }
 
 /// Create a block from start time, last-entry time, and entries (matching TypeScript logic).
-pub fn create_block_from_entries(
+fn create_block_from_entries(
     start_time: DateTime<Utc>,
     actual_end_time: DateTime<Utc>,
     entries: &[&UsageData],
