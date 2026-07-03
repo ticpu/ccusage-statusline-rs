@@ -20,7 +20,7 @@ pub struct PricingFetcher {
 
 impl PricingFetcher {
     const LITELLM_URL: &'static str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-    const MAX_AGE_SECONDS: i64 = 86400; // 24 hours
+    const MAX_AGE_SECONDS: i64 = 86400;
 
     /// Create a new pricing fetcher and load pricing data
     pub fn new(cache_dir: &Path) -> Result<Self> {
@@ -161,7 +161,6 @@ fn estimate_cost_fallback(entry: &UsageData) -> f64 {
         .unwrap_or("claude-sonnet-4-20250514");
 
     let pricing = if model.starts_with("claude-opus") {
-        // Opus family: $15/M input, $75/M output, no tiered pricing
         let prices = TokenPrices {
             input: 15e-6,
             output: 75e-6,
@@ -170,7 +169,6 @@ fn estimate_cost_fallback(entry: &UsageData) -> f64 {
         };
         ModelPricing::from_prices(prices, prices)
     } else if model.starts_with("claude-sonnet-4-5") {
-        // Sonnet 4.5: same base as Sonnet 4, no tiered pricing
         let prices = TokenPrices {
             input: 3e-6,
             output: 15e-6,
@@ -179,7 +177,6 @@ fn estimate_cost_fallback(entry: &UsageData) -> f64 {
         };
         ModelPricing::from_prices(prices, prices)
     } else {
-        // Default: Sonnet 4 with tiered pricing above 200k
         let base = TokenPrices {
             input: 3e-6,
             output: 15e-6,

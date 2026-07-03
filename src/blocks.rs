@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
 const BLOCK_DURATION_HOURS: i64 = 5;
-const FILE_LOOKBACK_HOURS: i64 = 12; // Look back 12h to catch overlapping blocks
+const FILE_LOOKBACK_HOURS: i64 = 12; // catches blocks that span the boundary
 const BUFREADER_CAPACITY: usize = 8192;
 
 /// Internal representation of a billing block span

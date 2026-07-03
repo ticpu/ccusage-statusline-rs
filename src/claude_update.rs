@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";
 const GCS_STABLE_URL: &str = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/stable";
-const UPDATE_CHECK_CACHE_TTL: Duration = Duration::from_secs(1800); // 30 minutes
+const UPDATE_CHECK_CACHE_TTL: Duration = Duration::from_secs(1800);
 
 #[derive(Debug, Clone, Copy)]
 enum VersionChannel {

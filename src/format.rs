@@ -336,7 +336,7 @@ pub fn format_context(context: Option<&ContextInfo>, thresholds: &Thresholds) ->
     }
 }
 
-/// Format currency with locale-based formatting
+/// Format amount as fixed two-decimal USD string
 pub fn format_currency(amount: f64) -> String {
     format!("${:.2}", amount)
 }
@@ -349,7 +349,7 @@ fn decimal_to_block(value: f64) -> char {
 }
 
 /// Format 5h API usage
-pub fn format_api_usage_5h(api_usage: Option<&ApiUsageData>) -> Option<String> {
+fn format_api_usage_5h(api_usage: Option<&ApiUsageData>) -> Option<String> {
     let w = api_usage.and_then(|a| {
         a.five_hour
             .as_ref()
@@ -364,7 +364,7 @@ pub fn format_api_usage_5h(api_usage: Option<&ApiUsageData>) -> Option<String> {
 }
 
 /// Format 7d API usage
-pub fn format_api_usage_7d(api_usage: Option<&ApiUsageData>) -> Option<String> {
+fn format_api_usage_7d(api_usage: Option<&ApiUsageData>) -> Option<String> {
     api_usage
         .and_then(|a| {
             a.seven_day
@@ -374,7 +374,7 @@ pub fn format_api_usage_7d(api_usage: Option<&ApiUsageData>) -> Option<String> {
 }
 
 /// Format Sonnet 7d API usage
-pub fn format_api_usage_sonnet(api_usage: Option<&ApiUsageData>) -> Option<String> {
+fn format_api_usage_sonnet(api_usage: Option<&ApiUsageData>) -> Option<String> {
     api_usage
         .and_then(|a| a.seven_day_sonnet)
         .map(|pct| format!("S7d:{}%", pct as u32))

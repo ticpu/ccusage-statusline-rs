@@ -46,16 +46,15 @@ struct CacheEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ClaudeCredentials {
-    #[serde(rename = "claudeAiOauth")]
     claude_ai_oauth: Option<OAuthCredentials>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OAuthCredentials {
-    #[serde(rename = "accessToken")]
     access_token: String,
-    #[serde(rename = "subscriptionType")]
     subscription_type: Option<String>,
 }
 
@@ -243,7 +242,6 @@ fn core_fetch_or_use_cache(
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
     // Exponential backoff: min(refresh * 2^errors, max_backoff)
-    // 0 errors → 5m, 1 → 10m, 2 → 20m, 3+ → 30m (capped)
     let errors = existing
         .as_ref()
         .map_or(0, |e| e.consecutive_errors);
