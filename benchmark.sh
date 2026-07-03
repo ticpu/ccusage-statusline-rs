@@ -53,9 +53,12 @@ fi
 
 # Rust ccusage-statusline-rs benchmark
 echo -e "${BLUE}Benchmarking Rust ccusage-statusline-rs...${NC}"
+# Same input as the Node.js run when available, minimal valid JSON otherwise
+INPUT_JSON='{}'
+[ -n "${TEST_DATA:-}" ] && INPUT_JSON=$(cat "$TEST_DATA")
 RUST_TOTAL=0
 for i in $(seq 1 $RUNS); do
-    RESULT=$( { time echo '{}' | ./target/release/ccusage-statusline-rs > /dev/null; } 2>&1 | grep real | awk '{print $2}' )
+    RESULT=$( { time echo "$INPUT_JSON" | ./target/release/ccusage-statusline-rs > /dev/null; } 2>&1 | grep real | awk '{print $2}' )
     # Convert to milliseconds
     MS=$(echo "$RESULT" | awk -F'[ms]' '{print ($1 * 60000) + ($2 * 1000) + $3}')
     RUST_TOTAL=$(echo "$RUST_TOTAL + $MS" | bc)
