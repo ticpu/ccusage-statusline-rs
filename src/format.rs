@@ -132,6 +132,25 @@ fn format_eta(duration: Duration) -> String {
     }
 }
 
+/// Compute ETA as reset_in scaled down by ratio (time to hit limit at current burn rate)
+fn scaled_eta(reset_in: Duration, ratio: f64) -> Duration {
+    Duration::seconds((reset_in.num_seconds() as f64 / ratio) as i64)
+}
+
+/// Color a string red/yellow/green based on value vs warning and danger thresholds
+fn colorize_by_threshold(s: &str, value: f64, warning: f64, danger: f64) -> String {
+    if value >= danger {
+        s.red()
+            .to_string()
+    } else if value >= warning {
+        s.yellow()
+            .to_string()
+    } else {
+        s.green()
+            .to_string()
+    }
+}
+
 /// Unified entry point for all burn rate display modes
 pub fn format_burn_rate_component(
     burn_rate: &BurnRate,
@@ -171,50 +190,40 @@ fn format_rate_display(
         PlanType::Subscription => format!("{}%", (burn_rate.ratio * 100.0).round() as i32),
     };
 
-    let colored_rate = if burn_rate.ratio >= thresholds.burn_rate_danger_ratio() {
-        rate_str
-            .red()
-            .to_string()
-    } else if burn_rate.ratio >= thresholds.burn_rate_warning_ratio() {
-        rate_str
-            .yellow()
-            .to_string()
-    } else {
-        rate_str
-            .green()
-            .to_string()
-    };
+    let colored_rate = colorize_by_threshold(
+        &rate_str,
+        burn_rate.ratio,
+        thresholds.burn_rate_warning_ratio(),
+        thresholds.burn_rate_danger_ratio(),
+    );
 
     let primary_eta = if show_eta && burn_rate.ratio >= thresholds.burn_rate_danger_ratio() {
-        if let Some(reset_in) = burn_rate.reset_in {
-            let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.ratio;
-            let eta_duration = Duration::seconds(eta_seconds as i64);
-            format!("[⏱{}]", format_eta(eta_duration))
-        } else {
-            String::new()
-        }
+        burn_rate
+            .reset_in
+            .map(|reset_in| format!("[⏱{}]", format_eta(scaled_eta(reset_in, burn_rate.ratio))))
+            .unwrap_or_default()
     } else {
         String::new()
     };
 
-    let limit_str = match burn_rate.critical_limit {
-        LimitType::FiveHour => " 5h",
-        LimitType::SevenDay => " 7d",
-        LimitType::None => "",
-    };
+    let limit_str = burn_rate
+        .critical_limit
+        .label();
 
     let seven_day_suffix = if burn_rate.seven_day_ratio >= thresholds.burn_rate_danger_ratio()
         && burn_rate.critical_limit != LimitType::SevenDay
     {
         let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
         let seven_day_eta = if show_eta {
-            if let Some(reset_in) = burn_rate.seven_day_reset_in {
-                let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.seven_day_ratio;
-                let eta_duration = Duration::seconds(eta_seconds as i64);
-                format!("[⏱{}]", format_eta(eta_duration))
-            } else {
-                String::new()
-            }
+            burn_rate
+                .seven_day_reset_in
+                .map(|reset_in| {
+                    format!(
+                        "[⏱{}]",
+                        format_eta(scaled_eta(reset_in, burn_rate.seven_day_ratio))
+                    )
+                })
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -239,9 +248,7 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
         burn_rate
             .reset_in
             .map(|reset_in| {
-                let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.ratio;
-                let eta_duration = Duration::seconds(eta_seconds as i64);
-                format_eta(eta_duration)
+                format_eta(scaled_eta(reset_in, burn_rate.ratio))
                     .red()
                     .to_string()
             })
@@ -257,11 +264,9 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
         None
     };
 
-    let limit_str = match burn_rate.critical_limit {
-        LimitType::FiveHour => " 5h",
-        LimitType::SevenDay => " 7d",
-        LimitType::None => "",
-    };
+    let limit_str = burn_rate
+        .critical_limit
+        .label();
 
     let secondary = if burn_rate.seven_day_ratio >= thresholds.burn_rate_danger_ratio()
         && burn_rate.critical_limit != LimitType::SevenDay
@@ -269,9 +274,10 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
         burn_rate
             .seven_day_reset_in
             .map(|reset_in| {
-                let eta_seconds = reset_in.num_seconds() as f64 / burn_rate.seven_day_ratio;
-                let eta_duration = Duration::seconds(eta_seconds as i64);
-                format!(" {} 7d", format_eta(eta_duration).red())
+                format!(
+                    " {} 7d",
+                    format_eta(scaled_eta(reset_in, burn_rate.seven_day_ratio)).red()
+                )
             })
     } else {
         None
@@ -293,23 +299,15 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
 pub fn format_context(context: Option<&ContextInfo>, thresholds: &Thresholds) -> String {
     match context {
         Some(info) => {
-            let color = if info.percentage < thresholds.context_warning {
-                info.percentage
-                    .to_string()
-                    .green()
-                    .to_string()
-            } else if info.percentage < thresholds.context_danger {
-                info.percentage
-                    .to_string()
-                    .yellow()
-                    .to_string()
-            } else {
-                info.percentage
-                    .to_string()
-                    .red()
-                    .to_string()
-            };
-
+            let pct_str = info
+                .percentage
+                .to_string();
+            let color = colorize_by_threshold(
+                &pct_str,
+                info.percentage as f64,
+                thresholds.context_warning as f64,
+                thresholds.context_danger as f64,
+            );
             format!("{}k({}%)", info.tokens / 1000, color)
         }
         None => "N/A".to_string(),

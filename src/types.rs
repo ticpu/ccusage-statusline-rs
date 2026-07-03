@@ -223,6 +223,16 @@ pub enum LimitType {
     None,
 }
 
+impl LimitType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            LimitType::FiveHour => " 5h",
+            LimitType::SevenDay => " 7d",
+            LimitType::None => "",
+        }
+    }
+}
+
 /// User's plan type
 #[derive(Debug, Clone, Copy)]
 pub enum PlanType {
