@@ -382,7 +382,7 @@ fn fetch_api_response() -> Result<ApiResponse> {
 
     let response = client
         .get(url)
-        .header("Authorization", format!("Bearer {}", access_token))
+        .bearer_auth(access_token)
         .header("Content-Type", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
         .header("User-Agent", user_agent)

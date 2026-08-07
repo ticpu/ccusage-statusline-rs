@@ -80,7 +80,8 @@ pub fn install() -> Result<()> {
 
     // Write back to file
     let updated_content = serde_json::to_string_pretty(&settings)?;
-    fs::write(&settings_path, updated_content).context("Failed to write settings file")?;
+    crate::cache::write_atomic(&settings_path, updated_content.as_bytes())
+        .context("Failed to write settings file")?;
 
     println!("✅ Successfully installed statusLine configuration!");
     println!("   Command: {}", binary_path_str);
@@ -121,7 +122,8 @@ pub fn uninstall() -> Result<()> {
 
     // Write back to file
     let updated_content = serde_json::to_string_pretty(&settings)?;
-    fs::write(&settings_path, updated_content).context("Failed to write settings file")?;
+    crate::cache::write_atomic(&settings_path, updated_content.as_bytes())
+        .context("Failed to write settings file")?;
 
     println!("✅ Successfully removed statusLine configuration!");
     println!();

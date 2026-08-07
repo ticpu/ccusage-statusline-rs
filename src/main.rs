@@ -76,6 +76,22 @@ fn main() -> Result<()> {
     }
 }
 
+/// `session_id` arrives as untrusted stdin JSON and names the output-cache file;
+/// a separator or `..` in it would place that file outside the cache dir.
+fn cache_file_name(session_id: &str) -> String {
+    let safe: String = session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{}.lock", safe)
+}
+
 fn run_piped_mode() -> Result<()> {
     let mut input = String::new();
     io::stdin()
@@ -90,7 +106,7 @@ fn run_piped_mode() -> Result<()> {
     let hook_data: HookData = serde_json::from_str(&input).context("Failed to parse JSON input")?;
 
     let cache_dir = get_cache_dir()?;
-    let cache_path = cache_dir.join(format!("{}.lock", hook_data.session_id));
+    let cache_path = cache_dir.join(cache_file_name(&hook_data.session_id));
 
     let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
     cleanup_stale_locks(
