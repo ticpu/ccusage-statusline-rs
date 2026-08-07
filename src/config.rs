@@ -5,7 +5,7 @@ use inquire::{CustomType, MultiSelect, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -369,6 +369,24 @@ impl fmt::Display for MainMenu {
     }
 }
 
+/// Redraw from a clean screen. The menu loops, and inquire leaves every answered
+/// prompt behind, so without this a few navigation steps bury the menu in its own
+/// history.
+fn clear_screen() {
+    if std::io::stdout().is_terminal() {
+        print!("\x1b[2J\x1b[H");
+        let _ = std::io::stdout().flush();
+    }
+}
+
+fn wait_for_enter() {
+    println!("Press Enter to continue.");
+    let mut discard = String::new();
+    if let Err(e) = std::io::stdin().read_line(&mut discard) {
+        eprintln!("Could not read from stdin: {e}");
+    }
+}
+
 pub fn run_config_menu() -> Result<()> {
     inquire::set_global_render_config(
         RenderConfig::default_colored().with_canceled_prompt_indicator(Styled::new("")),
@@ -377,6 +395,8 @@ pub fn run_config_menu() -> Result<()> {
     let mut config = StatuslineConfig::load_strict()?;
 
     loop {
+        clear_screen();
+
         let menu = vec![
             MainMenu::Elements,
             MainMenu::Thresholds,
@@ -391,7 +411,11 @@ pub fn run_config_menu() -> Result<()> {
         match choice {
             MainMenu::Elements => configure_elements(&mut config)?,
             MainMenu::Thresholds => configure_thresholds(&mut config.thresholds)?,
-            MainMenu::Help => print_help(),
+            MainMenu::Help => {
+                print_help();
+                // Nothing else pauses, and the next iteration clears the screen.
+                wait_for_enter();
+            }
             MainMenu::SaveAndExit => {
                 config.save()?;
                 println!(
@@ -436,9 +460,12 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
         default_indices.push(options.len() - 1);
     }
 
+    // Echoing every chosen label wraps over several lines on a normal terminal.
+    let total = options.len();
     let Some(selected) = MultiSelect::new("Select elements to display:", options)
         .with_default(&default_indices)
         .with_page_size(16)
+        .with_formatter(&|picked| format!("{} of {} enabled", picked.len(), total))
         .prompt_skippable()?
     else {
         return Ok(());
@@ -527,6 +554,8 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
     ];
 
     loop {
+        clear_screen();
+
         let mut options: Vec<String> = entries
             .iter()
             .map(|e| (e.display)(thresholds))
