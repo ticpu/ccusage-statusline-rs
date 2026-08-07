@@ -122,6 +122,7 @@ dependencies = [
  "clap",
  "dunce",
  "inquire",
+ "memchr",
  "owo-colors",
  "path-slash",
  "reqwest",

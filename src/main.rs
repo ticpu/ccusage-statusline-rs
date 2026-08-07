@@ -240,7 +240,16 @@ fn generate_statusline(
 
     let pricing = timing::phase("pricing", || PricingFetcher::new(&cache_dir))?;
     let claude_paths = find_claude_paths()?;
-    let block = timing::phase("block", || find_active_block(&claude_paths, &pricing))?;
+    let five_hour_reset = api_usage
+        .as_ref()
+        .and_then(|a| {
+            a.five_hour
+                .as_ref()
+        })
+        .and_then(|w| w.resets_at);
+    let block = timing::phase("block", || {
+        find_active_block(&claude_paths, &pricing, five_hour_reset)
+    })?;
     let burn_rate = calculate_burn_rate(
         block.as_ref(),
         api_usage.as_ref(),

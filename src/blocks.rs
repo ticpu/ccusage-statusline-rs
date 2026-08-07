@@ -9,10 +9,10 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 
 const BLOCK_DURATION_HOURS: i64 = 5;
-const FILE_LOOKBACK_HOURS: i64 = 12; // catches blocks that span the boundary
+const FILE_LOOKBACK_HOURS: i64 = 12; // only used when no authoritative reset time is available
 const BUFREADER_CAPACITY: usize = 8192;
 /// Substring every billable entry carries; used to skip lines before parsing them.
-const USAGE_MARKER: &str = "\"usage\"";
+const USAGE_MARKER: &[u8] = b"\"usage\"";
 
 /// Internal representation of a billing block span
 struct Block {
@@ -173,18 +173,16 @@ fn seek_to_cutoff(reader: &mut BufReader<File>, len: u64, cutoff: &str) -> std::
     Ok(lo)
 }
 
-/// Find the most recent active billing block, if any.
-pub fn find_active_block(
+/// Read every deduplicated usage entry at or after `cutoff`, sorted by timestamp.
+fn collect_entries(
     claude_paths: &[PathBuf],
-    pricing: &PricingFetcher,
-) -> Result<Option<ActiveBlock>> {
+    cutoff: DateTime<Utc>,
+) -> Result<Vec<(DateTime<Utc>, UsageData)>> {
     let mut all_entries: Vec<UsageData> = Vec::with_capacity(1000);
     let mut processed_hashes: HashSet<String> = HashSet::with_capacity(1000);
 
-    let now = Utc::now();
-    let file_cutoff_time = now - Duration::hours(FILE_LOOKBACK_HOURS);
-    let file_cutoff_timestamp = file_cutoff_time.timestamp();
-    let cutoff_rfc3339 = file_cutoff_time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let file_cutoff_timestamp = cutoff.timestamp();
+    let cutoff_rfc3339 = cutoff.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
     let session_files = crate::timing::phase_counted("block.scan", || {
         let r = iter_jsonl_files_since(claude_paths, Some(file_cutoff_timestamp));
@@ -195,7 +193,10 @@ pub fn find_active_block(
         (r, n)
     })?;
 
-    let mut line = String::with_capacity(BUFREADER_CAPACITY);
+    // Bytes, not String: `read_line` UTF-8-validates every byte of every transcript,
+    // and the overwhelming majority are lines this loop is about to discard.
+    let mut line: Vec<u8> = Vec::with_capacity(BUFREADER_CAPACITY);
+    let mut read_bytes: u64 = 0;
 
     for session_file in session_files {
         let file = match File::open(&session_file) {
@@ -233,9 +234,9 @@ pub fn find_active_block(
         // transcripts run to hundreds of thousands of lines.
         loop {
             line.clear();
-            match reader.read_line(&mut line) {
+            match reader.read_until(b'\n', &mut line) {
                 Ok(0) => break,
-                Ok(_) => {}
+                Ok(n) => read_bytes += n as u64,
                 Err(e) => {
                     warn_skipped(&session_file, &e);
                     break;
@@ -244,10 +245,10 @@ pub fn find_active_block(
             // Most transcript lines are prompts and tool results carrying no usage, and
             // they are the large ones. Rejecting them on a substring keeps serde off the
             // bulk of the file: parsing every line dominates the whole render otherwise.
-            if !line.contains(USAGE_MARKER) {
+            if memchr::memmem::find(&line, USAGE_MARKER).is_none() {
                 continue;
             }
-            if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
+            if let Ok(entry) = serde_json::from_slice::<UsageData>(&line) {
                 if let (Some(msg_id), Some(req_id)) = (
                     &entry
                         .message
@@ -269,6 +270,8 @@ pub fn find_active_block(
         }
     }
 
+    crate::timing::note("block.read", read_bytes, all_entries.len());
+
     // Parse each timestamp once; skip entries whose timestamps are unparseable
     let mut parsed: Vec<(DateTime<Utc>, UsageData)> = all_entries
         .into_iter()
@@ -280,9 +283,44 @@ pub fn find_active_block(
         .collect();
     parsed.sort_by_key(|(dt, _)| *dt);
 
-    let blocks = group_into_blocks(&parsed, pricing);
+    Ok(parsed)
+}
 
+/// Find the most recent active billing block, if any.
+///
+/// `five_hour_reset` is the authoritative window end when the API or stdin supplied
+/// one. Deriving boundaries instead makes each one depend on all earlier activity, so
+/// any scan horizon silently moves the active block's start; a known reset time pins
+/// it, and bounds the scan to the block itself rather than a guessed lookback.
+pub fn find_active_block(
+    claude_paths: &[PathBuf],
+    pricing: &PricingFetcher,
+    five_hour_reset: Option<DateTime<Utc>>,
+) -> Result<Option<ActiveBlock>> {
     let now = Utc::now();
+
+    if let Some(reset) = five_hour_reset.filter(|r| *r > now) {
+        let start = reset - Duration::hours(BLOCK_DURATION_HOURS);
+        let entries = collect_entries(claude_paths, start)?;
+        let cost_usd = entries
+            .iter()
+            .filter(|(t, _)| *t >= start)
+            .map(|(_, e)| pricing.calculate_entry_cost(e))
+            .sum();
+
+        return Ok(Some(ActiveBlock {
+            start_time: start,
+            cost_usd,
+            hours_remaining: ((reset - now).num_seconds() as f64 / 3600.0).max(0.0),
+        }));
+    }
+
+    // No reset time: fall back to deriving boundaries from activity gaps. The horizon
+    // is a compromise — too short re-anchors the chain, too long costs more than the
+    // whole render budget.
+    let parsed = collect_entries(claude_paths, now - Duration::hours(FILE_LOOKBACK_HOURS))?;
+    let blocks = crate::timing::phase("block.group", || group_into_blocks(&parsed, pricing));
+
     for block in blocks
         .iter()
         .rev()

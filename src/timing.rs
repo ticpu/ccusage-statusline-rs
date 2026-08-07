@@ -54,3 +54,16 @@ fn report(name: &str, millis: f64, count: Option<usize>) {
         None => eprintln!("timing {name}: {millis:.1}ms"),
     }
 }
+
+/// Record a volume the render had to process, alongside how many items came out of it.
+/// A phase that is slow because it was handed 60 MB is a different problem from one
+/// that is slow per item.
+pub fn note(name: &str, bytes: u64, items: usize) {
+    if !enabled() {
+        return;
+    }
+    eprintln!(
+        "timing {name}: {:.1} MB -> {items} entries",
+        bytes as f64 / (1024.0 * 1024.0)
+    );
+}
