@@ -240,14 +240,29 @@ impl StatuslineConfig {
             return Ok(Self::default());
         }
 
-        let content = fs::read_to_string(&path)?;
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
         match serde_json::from_str::<Self>(&content) {
             Ok(config) => Ok(config),
             Err(e) => {
                 if std::io::stderr().is_terminal() {
-                    eprintln!("Config parse error ({}): {}", path.display(), e);
+                    eprintln!("Config parse error ({}): {:#}", path.display(), e);
                 }
                 Ok(Self::default())
+            }
+        }
+    }
+
+    /// `load()` with the fallback to defaults reported rather than silent: an
+    /// unreadable config otherwise reverts the whole statusline with no message.
+    pub fn load_or_default() -> Self {
+        match Self::load() {
+            Ok(config) => config,
+            Err(e) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("Config load failed, using defaults: {:#}", e);
+                }
+                Self::default()
             }
         }
     }

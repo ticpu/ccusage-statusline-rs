@@ -108,7 +108,7 @@ fn run_piped_mode() -> Result<()> {
     let cache_dir = get_cache_dir()?;
     let cache_path = cache_dir.join(cache_file_name(&hook_data.session_id));
 
-    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+    let statusline_config = config::StatuslineConfig::load_or_default();
     cleanup_stale_locks(
         &cache_dir,
         statusline_config
@@ -150,7 +150,7 @@ fn run_piped_mode() -> Result<()> {
 }
 
 fn run_interactive_mode() -> Result<()> {
-    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+    let statusline_config = config::StatuslineConfig::load_or_default();
     let hook_data = HookData {
         session_id: String::new(),
         transcript_path: String::new(),
@@ -206,7 +206,7 @@ fn run_test_mode() -> Result<()> {
         rate_limits: None,
     };
 
-    let statusline_config = config::StatuslineConfig::load().unwrap_or_default();
+    let statusline_config = config::StatuslineConfig::load_or_default();
     let output = generate_statusline(&hook_data, &statusline_config)?;
     println!("{}", output);
 
