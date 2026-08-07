@@ -6,6 +6,7 @@ mod claude_binary;
 mod claude_update;
 mod config;
 mod context;
+mod entry_cache;
 mod format;
 mod http;
 mod install;
@@ -248,7 +249,7 @@ fn generate_statusline(
         })
         .and_then(|w| w.resets_at);
     let block = timing::phase("block", || {
-        find_active_block(&claude_paths, &pricing, five_hour_reset)
+        find_active_block(&claude_paths, &pricing, &cache_dir, five_hour_reset)
     })?;
     let burn_rate = calculate_burn_rate(
         block.as_ref(),

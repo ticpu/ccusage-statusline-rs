@@ -74,7 +74,7 @@ pub struct MessageData {
 
 /// Per-TTL split of `cache_creation_input_tokens`. Long-TTL writes cost more, and the
 /// flat total cannot distinguish them.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CacheCreationBreakdown {
     #[serde(default)]
     pub ephemeral_5m_input_tokens: u64,
@@ -82,7 +82,7 @@ pub struct CacheCreationBreakdown {
     pub ephemeral_1h_input_tokens: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct UsageTokens {
     #[serde(default)]
     pub input_tokens: u64,

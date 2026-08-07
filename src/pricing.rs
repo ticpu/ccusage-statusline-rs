@@ -1,4 +1,4 @@
-use crate::types::{ModelPricing, TokenPrices, UsageData};
+use crate::types::{ModelPricing, TokenPrices, UsageTokens};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -134,21 +134,15 @@ impl PricingFetcher {
         None
     }
 
-    /// Calculate cost for a usage entry
-    pub fn calculate_entry_cost(&self, entry: &UsageData) -> f64 {
-        if let Some(model_name) = &entry
-            .message
-            .model
-            && let Some(pricing) = self.get_model_pricing(model_name)
+    /// Cost from model id and token counts alone, so cached entries need not
+    /// reconstruct a whole transcript record to be re-priced.
+    pub fn calculate_cost_for(&self, model: Option<&str>, usage: &UsageTokens) -> f64 {
+        if let Some(name) = model
+            && let Some(pricing) = self.get_model_pricing(name)
         {
-            return pricing.calculate_cost(
-                &entry
-                    .message
-                    .usage,
-            );
+            return pricing.calculate_cost(usage);
         }
-        // Fallback to hardcoded estimate if model not found in LiteLLM
-        estimate_cost_fallback(entry)
+        estimate_cost_fallback(model, usage)
     }
 }
 
@@ -170,12 +164,7 @@ fn prices_from(input: f64, output: f64) -> TokenPrices {
 
 /// Fallback cost estimation for a model LiteLLM does not list. Current models carry no
 /// above-threshold tier, so base and tiered prices are the same.
-fn estimate_cost_fallback(entry: &UsageData) -> f64 {
-    let model = entry
-        .message
-        .model
-        .as_deref();
-
+fn estimate_cost_fallback(model: Option<&str>, usage: &UsageTokens) -> f64 {
     let prices = match model {
         Some(m) if m.contains("opus") => prices_from(5e-6, 25e-6),
         Some(m) if m.contains("haiku") => prices_from(1e-6, 5e-6),
@@ -191,9 +180,5 @@ fn estimate_cost_fallback(entry: &UsageData) -> f64 {
         }
     };
 
-    ModelPricing::from_prices(prices, prices).calculate_cost(
-        &entry
-            .message
-            .usage,
-    )
+    ModelPricing::from_prices(prices, prices).calculate_cost(usage)
 }

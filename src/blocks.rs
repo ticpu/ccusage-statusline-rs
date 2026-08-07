@@ -1,12 +1,13 @@
+use crate::entry_cache::CachedEntry;
 use crate::paths::{iter_jsonl_files_since, warn_skipped};
 use crate::pricing::PricingFetcher;
 use crate::types::{ActiveBlock, UsageData};
 use anyhow::Result;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const BLOCK_DURATION_HOURS: i64 = 5;
 const FILE_LOOKBACK_HOURS: i64 = 12; // only used when no authoritative reset time is available
@@ -32,19 +33,18 @@ fn floor_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// Group pre-parsed, sorted usage entries into 5-hour billing blocks.
-fn group_into_blocks(
-    entries: &[(DateTime<Utc>, UsageData)],
-    pricing: &PricingFetcher,
-) -> Vec<Block> {
+fn group_into_blocks(entries: &[CachedEntry], pricing: &PricingFetcher) -> Vec<Block> {
     let session_duration_ms = BLOCK_DURATION_HOURS * 60 * 60 * 1000;
     let mut blocks = Vec::new();
     // (floored block start, last entry time)
     let mut current_span: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
-    let mut block_entries: Vec<&UsageData> = Vec::new();
+    let mut block_entries: Vec<&CachedEntry> = Vec::new();
     let now = Utc::now();
 
-    for (entry_time, entry) in entries {
-        let entry_time = *entry_time;
+    for entry in entries {
+        let Some(entry_time) = DateTime::from_timestamp_millis(entry.ts) else {
+            continue;
+        };
 
         if let Some((start, last_time)) = current_span {
             let time_since_start = entry_time.timestamp_millis() - start.timestamp_millis();
@@ -89,7 +89,7 @@ fn group_into_blocks(
 fn create_block_from_entries(
     start_time: DateTime<Utc>,
     actual_end_time: DateTime<Utc>,
-    entries: &[&UsageData],
+    entries: &[&CachedEntry],
     now: DateTime<Utc>,
     session_duration_ms: i64,
     pricing: &PricingFetcher,
@@ -102,7 +102,12 @@ fn create_block_from_entries(
 
     let mut cost_usd = 0.0;
     for entry in entries {
-        cost_usd += pricing.calculate_entry_cost(entry);
+        cost_usd += pricing.calculate_cost_for(
+            entry
+                .model
+                .as_deref(),
+            &entry.usage,
+        );
     }
 
     Block {
@@ -173,19 +178,110 @@ fn seek_to_cutoff(reader: &mut BufReader<File>, len: u64, cutoff: &str) -> std::
     Ok(lo)
 }
 
-/// Read every deduplicated usage entry at or after `cutoff`, sorted by timestamp.
+/// Parse the appended part of one transcript into cache entries.
+fn parse_from(
+    session_file: &Path,
+    resume_at: u64,
+    file_len: u64,
+    cutoff_rfc3339: &str,
+    line: &mut Vec<u8>,
+) -> (Vec<CachedEntry>, u64, u64) {
+    let file = match File::open(session_file) {
+        Ok(f) => f,
+        Err(e) => {
+            // A transcript can vanish between the scan and the open; one missing
+            // session must not blank the whole statusline.
+            warn_skipped(session_file, &e);
+            return (Vec::new(), resume_at, 0);
+        }
+    };
+    let mut reader = BufReader::with_capacity(BUFREADER_CAPACITY, file);
+
+    // Nothing cached yet: skip the bulk of a long transcript instead of reading it
+    // only to discard everything before the window.
+    let mut offset = resume_at;
+    if resume_at == 0 && file_len >= BISECT_MIN_BYTES {
+        match seek_to_cutoff(&mut reader, file_len, cutoff_rfc3339) {
+            Ok(off) => offset = off,
+            Err(e) => warn_skipped(session_file, &e),
+        }
+    }
+    if let Err(e) = reader.seek(SeekFrom::Start(offset)) {
+        warn_skipped(session_file, &e);
+        return (Vec::new(), resume_at, 0);
+    }
+
+    let mut entries = Vec::new();
+    let mut read_bytes = 0u64;
+    let mut consumed = offset;
+
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', line) {
+            Ok(0) => break,
+            Ok(n) => {
+                read_bytes += n as u64;
+                consumed += n as u64;
+            }
+            Err(e) => {
+                warn_skipped(session_file, &e);
+                break;
+            }
+        }
+        // Most transcript lines are prompts and tool results carrying no usage, and
+        // they are the large ones. Rejecting them on a substring keeps serde off the
+        // bulk of the file: parsing every line dominates the whole render otherwise.
+        if memchr::memmem::find(line, USAGE_MARKER).is_none() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_slice::<UsageData>(line) else {
+            continue;
+        };
+        let Ok(ts) = DateTime::parse_from_rfc3339(&entry.timestamp) else {
+            continue;
+        };
+
+        let key = match (
+            &entry
+                .message
+                .id,
+            &entry.request_id,
+        ) {
+            (Some(m), Some(r)) => Some(format!("{m}:{r}")),
+            _ => None,
+        };
+        entries.push(CachedEntry {
+            ts: ts.timestamp_millis(),
+            key,
+            model: entry
+                .message
+                .model,
+            usage: entry
+                .message
+                .usage,
+        });
+    }
+
+    (entries, consumed, read_bytes)
+}
+
+/// Every deduplicated entry at or after `cutoff`, sorted by timestamp.
+///
+/// Transcripts are only ever extended, so each render parses the bytes appended since
+/// the last one and reuses what was already extracted.
 fn collect_entries(
     claude_paths: &[PathBuf],
     cutoff: DateTime<Utc>,
-) -> Result<Vec<(DateTime<Utc>, UsageData)>> {
-    let mut all_entries: Vec<UsageData> = Vec::with_capacity(1000);
-    let mut processed_hashes: HashSet<String> = HashSet::with_capacity(1000);
-
-    let file_cutoff_timestamp = cutoff.timestamp();
-    let cutoff_rfc3339 = cutoff.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    cache_dir: &Path,
+) -> Result<Vec<CachedEntry>> {
+    // The cache is filled to the widest horizon any caller can ask for, so a narrow
+    // request never leaves it unable to answer a later wider one.
+    let widest = Utc::now() - Duration::hours(FILE_LOOKBACK_HOURS);
+    let horizon = cutoff.min(widest);
+    let cutoff_rfc3339 = horizon.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
     let session_files = crate::timing::phase_counted("block.scan", || {
-        let r = iter_jsonl_files_since(claude_paths, Some(file_cutoff_timestamp));
+        let r = iter_jsonl_files_since(claude_paths, Some(horizon.timestamp()));
         let n = r
             .as_ref()
             .map(|v| v.len())
@@ -193,97 +289,67 @@ fn collect_entries(
         (r, n)
     })?;
 
-    // Bytes, not String: `read_line` UTF-8-validates every byte of every transcript,
-    // and the overwhelming majority are lines this loop is about to discard.
+    // Bytes, not String: `read_until` skips the UTF-8 validation `read_line` would run
+    // over every transcript, and most lines are discarded immediately.
     let mut line: Vec<u8> = Vec::with_capacity(BUFREADER_CAPACITY);
-    let mut read_bytes: u64 = 0;
+    let mut read_bytes = 0u64;
 
-    for session_file in session_files {
-        let file = match File::open(&session_file) {
-            Ok(f) => f,
-            Err(e) => {
-                // A transcript can vanish between the scan and the open; one missing
-                // session must not blank the whole statusline.
-                warn_skipped(&session_file, &e);
-                continue;
-            }
-        };
-        let file_len = file
-            .metadata()
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let mut reader = BufReader::with_capacity(BUFREADER_CAPACITY, file);
+    let cache_file = crate::entry_cache::cache_path(cache_dir);
+    let mut collected: Vec<CachedEntry> = Vec::with_capacity(1000);
 
-        if file_len >= BISECT_MIN_BYTES {
-            match seek_to_cutoff(&mut reader, file_len, &cutoff_rfc3339)
-                .and_then(|off| reader.seek(SeekFrom::Start(off)))
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    // Fall back to the whole file rather than lose the session.
-                    warn_skipped(&session_file, &e);
-                    if let Err(e) = reader.seek(SeekFrom::Start(0)) {
-                        warn_skipped(&session_file, &e);
-                        continue;
-                    }
+    crate::entry_cache::with_cache(&cache_file, |cache| {
+        let mut changed = false;
+
+        for session_file in &session_files {
+            let file_len = fs::metadata(session_file)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let resume_at = cache.resume_at(session_file, file_len);
+
+            if resume_at < file_len {
+                let (entries, consumed, bytes) = parse_from(
+                    session_file,
+                    resume_at,
+                    file_len,
+                    &cutoff_rfc3339,
+                    &mut line,
+                );
+                read_bytes += bytes;
+                if consumed != resume_at || !entries.is_empty() {
+                    cache.record(session_file, consumed, entries);
+                    changed = true;
                 }
             }
+
+            collected.extend_from_slice(cache.entries_for(session_file));
         }
 
-        // One buffer for the whole file: `lines()` heap-allocates per line, and these
-        // transcripts run to hundreds of thousands of lines.
-        loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
-                Ok(0) => break,
-                Ok(n) => read_bytes += n as u64,
-                Err(e) => {
-                    warn_skipped(&session_file, &e);
-                    break;
-                }
-            }
-            // Most transcript lines are prompts and tool results carrying no usage, and
-            // they are the large ones. Rejecting them on a substring keeps serde off the
-            // bulk of the file: parsing every line dominates the whole render otherwise.
-            if memchr::memmem::find(&line, USAGE_MARKER).is_none() {
-                continue;
-            }
-            if let Ok(entry) = serde_json::from_slice::<UsageData>(&line) {
-                if let (Some(msg_id), Some(req_id)) = (
-                    &entry
-                        .message
-                        .id,
-                    &entry.request_id,
-                ) {
-                    let mut hash = String::with_capacity(msg_id.len() + req_id.len() + 1);
-                    hash.push_str(msg_id);
-                    hash.push(':');
-                    hash.push_str(req_id);
-
-                    if !processed_hashes.insert(hash) {
-                        continue;
-                    }
-                }
-
-                all_entries.push(entry);
-            }
+        if changed {
+            cache.prune(horizon.timestamp_millis());
         }
+        ((), changed)
+    })?;
+
+    crate::timing::note("block.read", read_bytes, collected.len());
+
+    // Deduplication spans files, so it cannot happen while reading any single one.
+    let mut seen: HashSet<&str> = HashSet::with_capacity(collected.len());
+    let cutoff_ms = cutoff.timestamp_millis();
+    let mut out: Vec<CachedEntry> = Vec::with_capacity(collected.len());
+    for entry in &collected {
+        if entry.ts < cutoff_ms {
+            continue;
+        }
+        if let Some(k) = &entry.key
+            && !seen.insert(k.as_str())
+        {
+            continue;
+        }
+        out.push(entry.clone());
     }
 
-    crate::timing::note("block.read", read_bytes, all_entries.len());
-
-    // Parse each timestamp once; skip entries whose timestamps are unparseable
-    let mut parsed: Vec<(DateTime<Utc>, UsageData)> = all_entries
-        .into_iter()
-        .filter_map(|e| {
-            DateTime::parse_from_rfc3339(&e.timestamp)
-                .ok()
-                .map(|dt| (dt.with_timezone(&Utc), e))
-        })
-        .collect();
-    parsed.sort_by_key(|(dt, _)| *dt);
-
-    Ok(parsed)
+    out.sort_by_key(|e| e.ts);
+    Ok(out)
 }
 
 /// Find the most recent active billing block, if any.
@@ -295,17 +361,23 @@ fn collect_entries(
 pub fn find_active_block(
     claude_paths: &[PathBuf],
     pricing: &PricingFetcher,
+    cache_dir: &Path,
     five_hour_reset: Option<DateTime<Utc>>,
 ) -> Result<Option<ActiveBlock>> {
     let now = Utc::now();
 
     if let Some(reset) = five_hour_reset.filter(|r| *r > now) {
         let start = reset - Duration::hours(BLOCK_DURATION_HOURS);
-        let entries = collect_entries(claude_paths, start)?;
+        let entries = collect_entries(claude_paths, start, cache_dir)?;
         let cost_usd = entries
             .iter()
-            .filter(|(t, _)| *t >= start)
-            .map(|(_, e)| pricing.calculate_entry_cost(e))
+            .map(|e| {
+                pricing.calculate_cost_for(
+                    e.model
+                        .as_deref(),
+                    &e.usage,
+                )
+            })
             .sum();
 
         return Ok(Some(ActiveBlock {
@@ -318,7 +390,11 @@ pub fn find_active_block(
     // No reset time: fall back to deriving boundaries from activity gaps. The horizon
     // is a compromise — too short re-anchors the chain, too long costs more than the
     // whole render budget.
-    let parsed = collect_entries(claude_paths, now - Duration::hours(FILE_LOOKBACK_HOURS))?;
+    let parsed = collect_entries(
+        claude_paths,
+        now - Duration::hours(FILE_LOOKBACK_HOURS),
+        cache_dir,
+    )?;
     let blocks = crate::timing::phase("block.group", || group_into_blocks(&parsed, pricing));
 
     for block in blocks
@@ -348,6 +424,109 @@ mod tests {
         format!(
             r#"{{"timestamp":"{ts}","message":{{"usage":{{"input_tokens":1}}}},"note":"{body}"}}"#
         )
+    }
+
+    fn usage_line(ts: &DateTime<Utc>, id: &str, input: u64) -> String {
+        format!(
+            r#"{{"timestamp":"{}","requestId":"r{id}","message":{{"id":"m{id}","model":"claude-opus-5","usage":{{"input_tokens":{input},"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#,
+            ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        )
+    }
+
+    /// Resuming from the recorded offset must produce exactly what a full re-read would.
+    /// If it ever does not, cost is silently wrong and nothing reports it.
+    #[test]
+    fn test_incremental_parse_matches_full_reparse() {
+        let root = crate::paths::test_scratch_dir("blocks-incremental");
+        let projects = root.join("projects");
+        let proj = projects.join("p");
+        fs::create_dir_all(&proj).unwrap();
+        let transcript = proj.join("session.jsonl");
+
+        let now = Utc::now();
+        let mut f = fs::File::create(&transcript).unwrap();
+        for i in 0..3 {
+            writeln!(
+                f,
+                "{}",
+                usage_line(&(now - Duration::minutes(60 - i)), &i.to_string(), 100)
+            )
+            .unwrap();
+        }
+        drop(f);
+
+        let paths = vec![projects.clone()];
+        let cutoff = now - Duration::hours(5);
+
+        // Warm the cache, then append and collect again.
+        let first = collect_entries(&paths, cutoff, &root).unwrap();
+        assert_eq!(first.len(), 3);
+
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        for i in 3..6 {
+            writeln!(
+                f,
+                "{}",
+                usage_line(&(now - Duration::minutes(60 - i)), &i.to_string(), 100)
+            )
+            .unwrap();
+        }
+        drop(f);
+
+        let incremental = collect_entries(&paths, cutoff, &root).unwrap();
+
+        // Same inputs, but with no cache to resume from.
+        fs::remove_file(crate::entry_cache::cache_path(&root)).unwrap();
+        let full = collect_entries(&paths, cutoff, &root).unwrap();
+
+        assert_eq!(incremental.len(), 6);
+        assert_eq!(
+            incremental
+                .iter()
+                .map(|e| (
+                    e.ts,
+                    e.key
+                        .clone(),
+                    e.usage
+                        .input_tokens
+                ))
+                .collect::<Vec<_>>(),
+            full.iter()
+                .map(|e| (
+                    e.ts,
+                    e.key
+                        .clone(),
+                    e.usage
+                        .input_tokens
+                ))
+                .collect::<Vec<_>>()
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The same message written to two transcripts must be counted once.
+    #[test]
+    fn test_dedup_spans_files() {
+        let root = crate::paths::test_scratch_dir("blocks-dedup");
+        let projects = root.join("projects");
+        let proj = projects.join("p");
+        fs::create_dir_all(&proj).unwrap();
+
+        let now = Utc::now();
+        let line = usage_line(&(now - Duration::minutes(10)), "same", 100);
+        for name in ["a.jsonl", "b.jsonl"] {
+            let mut f = fs::File::create(proj.join(name)).unwrap();
+            writeln!(f, "{line}").unwrap();
+        }
+
+        let entries = collect_entries(&[projects], now - Duration::hours(5), &root).unwrap();
+        assert_eq!(entries.len(), 1);
+
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
