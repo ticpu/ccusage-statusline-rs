@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{ErrorKind, IsTerminal, Read};
+use std::io::{ErrorKind, IsTerminal, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use crate::cache::get_cache_dir;
@@ -67,7 +67,17 @@ fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Re
     {
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
-        serde_json::from_str(&contents).unwrap_or_default()
+        // Defaulting here would merge one stdin window onto an empty store and
+        // write that back, erasing the window this reading says nothing about.
+        match serde_json::from_str(&contents) {
+            Ok(s) => s,
+            Err(e) => {
+                file.unlock()?;
+                return Err(e).with_context(|| {
+                    format!("Failed to parse rate-limit store {}", store_path.display())
+                });
+            }
+        }
     } else {
         RateLimitsStore::default()
     };
@@ -98,8 +108,15 @@ fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Re
         );
     }
 
+    // Written through the locked descriptor, not published by rename: flock binds to
+    // the inode, so a rename would leave every waiter holding a lock on the unlinked
+    // old file and merging into content the winner had already superseded.
     if updated {
-        crate::cache::write_json_atomic(store_path, &store)?;
+        let json = serde_json::to_string(&store)?;
+        file.set_len(0)?;
+        file.rewind()?;
+        file.write_all(json.as_bytes())?;
+        file.sync_data()?;
     }
 
     file.unlock()?;
