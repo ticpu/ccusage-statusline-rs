@@ -7,9 +7,21 @@ use serde::Deserialize;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, IsTerminal};
 
-const COMPACTED_CONTEXT_LIMIT: u64 = 155_000;
-const FULL_CONTEXT_LIMIT: u64 = 200_000;
-const EXTENDED_CONTEXT_LIMIT: u64 = 1_000_000;
+// Reconstruction of Claude Code's managed context window. The statusline payload only
+// carries the raw model window, but what the user actually hits is auto-compact, which
+// fires against a narrower one. Values track Claude Code 2.1.224; when a release moves
+// them the whole group moves together.
+const DEFAULT_MODEL_WINDOW: u64 = 200_000;
+const EXTENDED_MODEL_WINDOW: u64 = 1_000_000;
+/// Held back for the response on every request.
+const OUTPUT_RESERVE: u64 = 20_000;
+/// Further headroom auto-compact keeps below the usable window before it triggers.
+const COMPACTION_HEADROOM: u64 = 13_000;
+
+/// Models whose auto-compact window is narrowed below their raw model window by
+/// policy. The narrowing only applies while auto-compact is on, which is why turning
+/// it off gains more window on these than on models absent from the table.
+const AUTO_COMPACT_WINDOWS: &[(&str, u64)] = &[("claude-sonnet-5", 967_000)];
 
 /// Claude configuration from ~/.claude.json
 #[derive(Debug, Deserialize)]
@@ -23,35 +35,48 @@ fn default_auto_compact() -> bool {
 }
 
 pub fn calculate_context(hook_data: &HookData) -> Result<Option<ContextInfo>> {
+    let model_id = hook_data
+        .model
+        .id
+        .as_deref();
+    let auto_compact = auto_compact_enabled();
+
     if let Some(cw) = &hook_data.context_window
-        && let Some(info) = context_from_window(cw)
+        && let Some(info) = context_from_window(cw, model_id, auto_compact)
     {
         return Ok(Some(info));
     }
 
-    calculate_context_from_transcript(
-        &hook_data.transcript_path,
-        hook_data
-            .model
-            .id
-            .as_deref(),
-    )
+    calculate_context_from_transcript(&hook_data.transcript_path, model_id, auto_compact)
 }
 
-fn context_from_window(cw: &ContextWindowData) -> Option<ContextInfo> {
-    let pct = cw.used_percentage?;
-
-    let tokens = if let Some(usage) = &cw.current_usage {
-        usage.context_tokens()
-    } else {
-        cw.total_input_tokens
-            .unwrap_or(0)
-    };
-
-    Some(ContextInfo {
+fn to_info(tokens: u64, limit: u64) -> ContextInfo {
+    ContextInfo {
         tokens,
-        percentage: (pct as u32).min(100),
-    })
+        percentage: ((tokens as f64 / limit as f64) * 100.0).min(100.0) as u32,
+    }
+}
+
+fn context_from_window(
+    cw: &ContextWindowData,
+    model_id: Option<&str>,
+    auto_compact: bool,
+) -> Option<ContextInfo> {
+    // `total_input_tokens` is the sum Claude Code derives its own percentage from;
+    // taking the count from one quantity and the percentage from another renders one
+    // element whose halves disagree.
+    let tokens = cw
+        .total_input_tokens
+        .or_else(|| {
+            cw.current_usage
+                .as_ref()
+                .map(|u| u.context_tokens())
+        })?;
+
+    Some(to_info(
+        tokens,
+        effective_context_limit(model_id, cw.context_window_size, auto_compact),
+    ))
 }
 
 fn is_1m_context_model(model_id: &str) -> bool {
@@ -67,28 +92,60 @@ fn is_1m_context_model(model_id: &str) -> bool {
     base.starts_with("claude-opus-4-6") || base.starts_with("claude-sonnet-4-6")
 }
 
-/// Pure decision core: model id + parsed config → context limit constant.
-fn select_context_limit(model_id: Option<&str>, config: Option<&ClaudeConfig>) -> u64 {
-    if let Some(id) = model_id
-        && is_1m_context_model(id)
-    {
-        return EXTENDED_CONTEXT_LIMIT;
+/// Raw model window, preferring what Claude Code reported over what we can infer.
+fn model_window(model_id: Option<&str>, reported: Option<u64>) -> u64 {
+    if let Some(size) = reported.filter(|s| *s > 0) {
+        return size;
     }
-
-    match config {
-        Some(c) if !c.auto_compact_enabled => FULL_CONTEXT_LIMIT,
-        _ => COMPACTED_CONTEXT_LIMIT,
+    match model_id {
+        Some(id) if is_1m_context_model(id) => EXTENDED_MODEL_WINDOW,
+        _ => DEFAULT_MODEL_WINDOW,
     }
 }
 
-fn get_context_limit(model_id: Option<&str>) -> u64 {
+fn auto_compact_window(model_id: Option<&str>) -> Option<u64> {
+    let id = model_id?;
+    AUTO_COMPACT_WINDOWS
+        .iter()
+        .find(|(prefix, _)| id.starts_with(prefix))
+        .map(|(_, window)| *window)
+}
+
+/// Token count at which the session stops growing — the auto-compact trigger when
+/// enabled, otherwise the plain usable window.
+///
+/// Reporting against the raw model window instead would read comfortable right up to
+/// the moment a session compacts.
+fn effective_context_limit(
+    model_id: Option<&str>,
+    reported_window: Option<u64>,
+    auto_compact: bool,
+) -> u64 {
+    let raw = model_window(model_id, reported_window);
+
+    let managed = if auto_compact {
+        auto_compact_window(model_id).map_or(raw, |policy| raw.min(policy))
+    } else {
+        raw
+    };
+
+    let usable = managed.saturating_sub(OUTPUT_RESERVE);
+    if auto_compact {
+        usable.saturating_sub(COMPACTION_HEADROOM)
+    } else {
+        usable
+    }
+    .max(1)
+}
+
+fn auto_compact_enabled() -> bool {
     let config_path = match claude_config_json_path() {
         Ok(p) => p,
         Err(e) => {
             if std::io::stderr().is_terminal() {
                 eprintln!("Context limit: could not determine config path: {e:#}");
             }
-            return select_context_limit(model_id, None);
+            return default_auto_compact();
         }
     };
 
@@ -117,16 +174,23 @@ fn get_context_limit(model_id: Option<&str>) -> u64 {
         }
     };
 
-    select_context_limit(model_id, config.as_ref())
+    config.map_or_else(default_auto_compact, |c| c.auto_compact_enabled)
 }
 
 fn calculate_context_from_transcript(
     transcript_path: &str,
     model_id: Option<&str>,
+    auto_compact: bool,
 ) -> Result<Option<ContextInfo>> {
     let file = match File::open(transcript_path) {
         Ok(f) => f,
-        Err(_) => return Ok(None),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!("Context: cannot read {transcript_path}: {e:#}");
+            }
+            return Ok(None);
+        }
     };
 
     let reader = BufReader::new(file);
@@ -151,13 +215,10 @@ fn calculate_context_from_transcript(
     }
 
     let total_tokens = last_tokens.unwrap_or(0);
-    let context_limit = get_context_limit(model_id);
-    let percentage = ((total_tokens as f64 / context_limit as f64) * 100.0).min(100.0) as u32;
+    // No payload here, so the raw window has to be inferred from the model id.
+    let limit = effective_context_limit(model_id, None, auto_compact);
 
-    Ok(Some(ContextInfo {
-        tokens: total_tokens,
-        percentage,
-    }))
+    Ok(Some(to_info(total_tokens, limit)))
 }
 
 #[cfg(test)]
@@ -174,20 +235,77 @@ mod tests {
         }
     }
 
-    fn compacted_config() -> ClaudeConfig {
-        serde_json::from_str(r#"{"autoCompactEnabled": true}"#).unwrap()
-    }
+    // effective_context_limit: the five states from the Claude Code window reconstruction.
+    // Each row is (model, raw window reported, auto-compact, expected limit).
 
-    fn full_config() -> ClaudeConfig {
-        serde_json::from_str(r#"{"autoCompactEnabled": false}"#).unwrap()
+    #[test]
+    fn test_limit_200k_model_auto_compact_on() {
+        assert_eq!(
+            effective_context_limit(Some("claude-opus-5"), Some(200_000), true),
+            167_000
+        );
     }
 
     #[test]
-    fn test_context_from_window_1m() {
+    fn test_limit_200k_model_auto_compact_off() {
+        assert_eq!(
+            effective_context_limit(Some("claude-opus-5"), Some(200_000), false),
+            180_000
+        );
+    }
+
+    /// Sonnet 5's auto-compact window is narrowed by policy below its raw window, so
+    /// turning auto-compact off gains far more here than on a model without an entry.
+    #[test]
+    fn test_limit_policy_narrowed_model() {
+        assert_eq!(
+            effective_context_limit(Some("claude-sonnet-5"), Some(1_000_000), true),
+            934_000
+        );
+        assert_eq!(
+            effective_context_limit(Some("claude-sonnet-5"), Some(1_000_000), false),
+            980_000
+        );
+    }
+
+    /// A 1M-entitled model absent from the policy table keeps its whole window.
+    #[test]
+    fn test_limit_1m_entitled_model_not_narrowed() {
+        assert_eq!(
+            effective_context_limit(Some("claude-opus-5"), Some(1_000_000), true),
+            967_000
+        );
+    }
+
+    #[test]
+    fn test_limit_infers_window_when_payload_absent() {
+        assert_eq!(
+            effective_context_limit(Some("claude-sonnet-4-5-20250929[1m]"), None, true),
+            967_000
+        );
+        assert_eq!(
+            effective_context_limit(Some("claude-sonnet-4-5-20250929"), None, true),
+            167_000
+        );
+        assert_eq!(effective_context_limit(None, None, true), 167_000);
+    }
+
+    /// The reported window wins over inference: entitlement can be revoked at runtime,
+    /// and only Claude Code knows that.
+    #[test]
+    fn test_limit_reported_window_overrides_model_id() {
+        assert_eq!(
+            effective_context_limit(Some("claude-opus-4-6"), Some(200_000), true),
+            167_000
+        );
+    }
+
+    #[test]
+    fn test_context_from_window_prefers_total_input_tokens() {
         use crate::types::ContextWindowData;
         let cw = ContextWindowData {
-            used_percentage: Some(4.2),
             total_input_tokens: Some(42_000),
+            context_window_size: Some(1_000_000),
             current_usage: Some(UsageTokens {
                 input_tokens: 8_500,
                 output_tokens: 0,
@@ -196,46 +314,39 @@ mod tests {
                 cache_creation: None,
             }),
         };
-        let info = context_from_window(&cw).unwrap();
-        assert_eq!(info.tokens, 15_500);
-        assert_eq!(info.percentage, 4);
+        let info = context_from_window(&cw, Some("claude-opus-5"), true).unwrap();
+        // The count and the percentage must describe the same quantity.
+        assert_eq!(info.tokens, 42_000);
+        assert_eq!(info.percentage, (42_000 * 100) / 967_000);
     }
 
     #[test]
-    fn test_context_from_window_200k() {
+    fn test_context_from_window_falls_back_to_current_usage() {
         use crate::types::ContextWindowData;
         let cw = ContextWindowData {
-            used_percentage: Some(47.5),
-            total_input_tokens: Some(95_000),
-            current_usage: None,
-        };
-        let info = context_from_window(&cw).unwrap();
-        assert_eq!(info.tokens, 95_000);
-        assert_eq!(info.percentage, 47);
-    }
-
-    #[test]
-    fn test_context_from_window_no_percentage() {
-        use crate::types::ContextWindowData;
-        let cw = ContextWindowData {
-            used_percentage: None,
-            total_input_tokens: Some(42_000),
-            current_usage: None,
-        };
-        assert!(context_from_window(&cw).is_none());
-    }
-
-    #[test]
-    fn test_context_from_window_defaults() {
-        use crate::types::ContextWindowData;
-        let cw = ContextWindowData {
-            used_percentage: Some(10.0),
             total_input_tokens: None,
+            context_window_size: Some(200_000),
+            current_usage: Some(UsageTokens {
+                input_tokens: 8_500,
+                output_tokens: 0,
+                cache_creation_input_tokens: 5_000,
+                cache_read_input_tokens: 2_000,
+                cache_creation: None,
+            }),
+        };
+        let info = context_from_window(&cw, Some("claude-opus-5"), true).unwrap();
+        assert_eq!(info.tokens, 15_500);
+    }
+
+    #[test]
+    fn test_context_from_window_without_tokens_is_none() {
+        use crate::types::ContextWindowData;
+        let cw = ContextWindowData {
+            total_input_tokens: None,
+            context_window_size: Some(200_000),
             current_usage: None,
         };
-        let info = context_from_window(&cw).unwrap();
-        assert_eq!(info.tokens, 0);
-        assert_eq!(info.percentage, 10);
+        assert!(context_from_window(&cw, Some("claude-opus-5"), true).is_none());
     }
 
     #[test]
@@ -244,12 +355,10 @@ mod tests {
         assert!(is_1m_context_model("claude-opus-4-6-20260205"));
         assert!(is_1m_context_model("claude-opus-4-6[1m]"));
         assert!(is_1m_context_model("claude-sonnet-4-6"));
-        assert!(is_1m_context_model("claude-sonnet-4-6[1m]"));
+        assert!(is_1m_context_model("claude-sonnet-4-5-20250929[1m]"));
 
         assert!(!is_1m_context_model("claude-opus-4-5-20251101"));
         assert!(!is_1m_context_model("claude-sonnet-4-5-20250929"));
-        assert!(!is_1m_context_model("claude-haiku-4-5-20251001"));
-        assert!(!is_1m_context_model("claude-sonnet-4-20250514"));
     }
 
     #[test]
@@ -264,8 +373,8 @@ mod tests {
             },
             workspace: None,
             context_window: Some(ContextWindowData {
-                used_percentage: Some(4.2),
                 total_input_tokens: Some(42_000),
+                context_window_size: Some(1_000_000),
                 current_usage: None,
             }),
             rate_limits: None,
@@ -273,70 +382,8 @@ mod tests {
         let info = calculate_context(&hook)
             .unwrap()
             .unwrap();
-        assert_eq!(info.percentage, 4);
         assert_eq!(info.tokens, 42_000);
     }
-
-    // select_context_limit: pure function tests — no IO, no real home directory
-
-    #[test]
-    fn test_select_limit_1m_model() {
-        assert_eq!(
-            select_context_limit(Some("claude-sonnet-4-6"), None),
-            EXTENDED_CONTEXT_LIMIT
-        );
-        assert_eq!(
-            select_context_limit(Some("claude-opus-4-6"), Some(&compacted_config())),
-            EXTENDED_CONTEXT_LIMIT
-        );
-    }
-
-    #[test]
-    fn test_select_limit_1m_suffix_on_200k_model() {
-        assert_eq!(
-            select_context_limit(Some("claude-sonnet-4-5-20250929[1m]"), None),
-            EXTENDED_CONTEXT_LIMIT
-        );
-        assert_eq!(
-            select_context_limit(Some("claude-sonnet-4-5-20250929"), None),
-            COMPACTED_CONTEXT_LIMIT
-        );
-    }
-
-    #[test]
-    fn test_select_limit_1m_overrides_full_config() {
-        assert_eq!(
-            select_context_limit(Some("claude-opus-4-6"), Some(&full_config())),
-            EXTENDED_CONTEXT_LIMIT
-        );
-    }
-
-    #[test]
-    fn test_select_limit_auto_compact_enabled() {
-        assert_eq!(
-            select_context_limit(Some("claude-sonnet-4-5"), Some(&compacted_config())),
-            COMPACTED_CONTEXT_LIMIT
-        );
-    }
-
-    #[test]
-    fn test_select_limit_auto_compact_disabled() {
-        assert_eq!(
-            select_context_limit(Some("claude-sonnet-4-5"), Some(&full_config())),
-            FULL_CONTEXT_LIMIT
-        );
-    }
-
-    #[test]
-    fn test_select_limit_no_config_defaults_compacted() {
-        assert_eq!(
-            select_context_limit(Some("claude-sonnet-4-5"), None),
-            COMPACTED_CONTEXT_LIMIT
-        );
-        assert_eq!(select_context_limit(None, None), COMPACTED_CONTEXT_LIMIT);
-    }
-
-    // calculate_context_from_transcript: drive production code with temp JSONL fixtures
 
     #[test]
     fn test_transcript_compacted_limit() {
@@ -350,21 +397,17 @@ mod tests {
             ],
         );
 
-        // compacted config → 155_000 limit; 95510/155000 = 61%
-        let limit = select_context_limit(Some("claude-sonnet-4-5"), Some(&compacted_config()));
-        assert_eq!(limit, COMPACTED_CONTEXT_LIMIT);
-
+        // 200k model with auto-compact on → 167_000 limit
         let info = calculate_context_from_transcript(
             path.to_str()
                 .unwrap(),
             Some("claude-sonnet-4-5"),
+            true,
         )
         .unwrap()
         .unwrap();
         assert_eq!(info.tokens, 95_510);
-        // percentage depends on get_context_limit which reads real disk; check tokens only here.
-        // Limit selection is covered by test_select_limit_* above.
-        assert!(info.percentage <= 100);
+        assert_eq!(info.percentage, (95_510 * 100) / 167_000);
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -380,14 +423,12 @@ mod tests {
             ],
         );
 
-        // 1M model → 1_000_000 limit; 95510/1000000 = 9%
-        let limit = select_context_limit(Some("claude-opus-4-6"), None);
-        assert_eq!(limit, EXTENDED_CONTEXT_LIMIT);
-
+        // 1M model, no policy narrowing → 967_000 limit
         let info = calculate_context_from_transcript(
             path.to_str()
                 .unwrap(),
             Some("claude-opus-4-6"),
+            true,
         )
         .unwrap()
         .unwrap();
@@ -414,10 +455,11 @@ mod tests {
             path.to_str()
                 .unwrap(),
             Some("claude-opus-4-6"),
+            true,
         )
         .unwrap()
         .unwrap();
-        // last entry: input=2000, total=2000; 2000/1_000_000*100 = 0%
+        // last entry wins: input=2000
         assert_eq!(info.tokens, 2_000);
 
         fs::remove_dir_all(&dir).unwrap();
@@ -433,6 +475,7 @@ mod tests {
             path.to_str()
                 .unwrap(),
             Some("claude-sonnet-4-5"),
+            true,
         )
         .unwrap()
         .unwrap();
@@ -444,8 +487,8 @@ mod tests {
 
     #[test]
     fn test_transcript_nonexistent_returns_none() {
-        let info =
-            calculate_context_from_transcript("/nonexistent/path/session.jsonl", None).unwrap();
+        let info = calculate_context_from_transcript("/nonexistent/path/session.jsonl", None, true)
+            .unwrap();
         assert!(info.is_none());
     }
 }

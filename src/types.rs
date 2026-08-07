@@ -30,9 +30,11 @@ pub struct Workspace {
 #[derive(Debug, Deserialize)]
 pub struct ContextWindowData {
     #[serde(default)]
-    pub used_percentage: Option<f64>,
-    #[serde(default)]
     pub total_input_tokens: Option<u64>,
+    /// Raw model window. Claude Code never exposes the smaller managed window that
+    /// auto-compact actually fires against, so this is only the starting point.
+    #[serde(default)]
+    pub context_window_size: Option<u64>,
     #[serde(default)]
     pub current_usage: Option<UsageTokens>,
 }
