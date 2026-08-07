@@ -3,7 +3,7 @@
 
 set -e
 
-if git diff --cached --diff-filter=AM --name-only | grep '\.rs$' | xargs grep -nH '#\[.*allow(dead_code).*\]'; then
+if git diff --cached --diff-filter=AM --name-only | grep '\.rs$' | xargs -r grep -nH '#\[.*allow(dead_code).*\]'; then
     echo "❌ Found #[allow(dead_code)] in staged files. Refactor the code without it or ask the user for explicit approval."
     exit 1
 fi
@@ -13,9 +13,12 @@ if ! cargo fmt -- --check; then
     exit 1
 fi
 
-if ! cargo clippy --all-targets --message-format=short -- -D warnings 2>&1 | grep -qE "^error|^warning"; then
-    exit 0
-else
+if cargo clippy --all-targets --message-format=short -- -D warnings 2>&1 | grep -qE "^error|^warning"; then
     cargo clippy --all-targets --message-format=short -- -D warnings
+    exit 1
+fi
+
+if ! cargo test --release --message-format=short; then
+    echo "❌ Tests failed."
     exit 1
 fi

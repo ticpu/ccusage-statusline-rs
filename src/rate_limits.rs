@@ -142,7 +142,7 @@ fn read_store_at(store_path: &Path) -> Result<RateLimitsStore> {
         Err(e) => {
             if std::io::stderr().is_terminal() {
                 eprintln!(
-                    "Rate-limit store parse error ({}): {}",
+                    "Rate-limit store parse error ({}): {:#}",
                     store_path.display(),
                     e
                 );

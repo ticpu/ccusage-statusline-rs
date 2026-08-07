@@ -36,16 +36,18 @@ src/
 ├── types.rs - All structs (HookData, Block, BurnRate, TokenPrices, ApiUsageData, etc.)
 ├── paths.rs - Shared path helpers (home_dir, find_claude_paths, iter_jsonl_files)
 ├── install.rs - Install/uninstall commands for ~/.claude/settings.json
-├── config.rs - Statusline element configuration (enable/disable/reorder)
+├── config.rs - Statusline element configuration (enable/disable, thresholds)
 ├── pricing.rs - LiteLLM pricing fetch from GitHub (24h cache)
 ├── blocks.rs - 5-hour billing block logic (dedup by messageId:requestId)
 ├── burn_rate.rs - Burn rate calculation from block + API usage data
 ├── context.rs - Context token calculation from transcript JSONL
-├── cache.rs - Semaphore-based output caching (XDG_RUNTIME_DIR, 30s TTL)
+├── cache.rs - Semaphore-based output caching (XDG_RUNTIME_DIR), shared cache IO
 ├── format.rs - Output formatting (emojis, colors, directory formatting)
 ├── claude_binary.rs - Claude Code binary detection and User-Agent extraction
 ├── claude_update.rs - Update availability check (stable/latest channels)
-└── api_usage.rs - Anthropic API client (OAuth from ~/.claude/.credentials.json)
+├── api_usage.rs - Anthropic API client (OAuth from ~/.claude/.credentials.json)
+├── entry_cache.rs - Incremental transcript parse cache (resume by byte offset)
+└── timing.rs - Env-gated phase timing (CCUSAGE_TIMING=1)
 ```
 
 **Data Flow**:
@@ -63,19 +65,25 @@ src/
 
 **API Usage** (`api_usage.rs`):
 - OAuth token from `~/.claude/.credentials.json`
-- Cache: 30s fresh, 5min max stale (returns `ApiUsageResult::StaleCache` after)
+- Cache TTLs are config-driven; see `CacheSettings` defaults in `config.rs`
 
 **5-Hour Billing Blocks**:
 - Floors timestamps to hour boundary
 - Deduplicates messages using `{messageId}:{requestId}` hash
-- Tracks per-model costs with tiered pricing (200k token threshold)
-- Active block = last message within 5 hours
+- Long-context tier selected per request from prompt size, applied to all categories
+- Cache writes priced by TTL (1h writes cost more than 5m)
+- Boundary comes from the API/stdin reset time when known; derived by gap otherwise
+
+**Profiling**: `CCUSAGE_TIMING=1 ccusage-statusline-rs test` prints per-phase wall
+time to stderr (`api`, `pricing`, `update`, `block.scan`, `block.read`, `block`,
+`context`). `block.read` also reports bytes parsed, which separates "slow phase"
+from "phase handed too much work".
 
 **Performance**:
 - Target: <20ms average in release mode (STRICTLY ENFORCED by CI)
 - This is 15x faster than Node.js warm (120ms)
 - Failing the performance test is NOT acceptable - investigate and fix before committing
-- Caching: Output cache (5min), pricing cache (24h), API cache (5min fresh / 30min stale)
+- Caching: output, API usage and transcript-entry caches (TTLs in `config.rs`), pricing (24h)
 - Early returns: Skip processing if cache hit
 
 **Install/Uninstall Commands**:

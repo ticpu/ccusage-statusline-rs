@@ -149,6 +149,30 @@ because Claude Code invokes the command through Git Bash.
 - **Speedup**: 15x faster
 - **CI enforced**: Unit tests verify <20ms execution time
 
+Transcripts are parsed incrementally: each render reads only the bytes appended
+since the last one, so cost stays flat as sessions grow.
+
+### Profiling
+
+Set `CCUSAGE_TIMING=1` to print per-phase wall time to stderr:
+
+```bash
+CCUSAGE_TIMING=1 ccusage-statusline-rs test 2>&1 >/dev/null
+```
+
+```
+timing api: 0.0ms
+timing pricing: 1.7ms
+timing fetches: 1.8ms
+timing block.scan: 1.2ms (36)
+timing block.read: 0.0 MB -> 3427 entries
+timing block: 3.8ms
+timing context: 2.6ms
+```
+
+`block.read` reports bytes parsed alongside entries produced, which distinguishes
+a slow phase from one handed too much work.
+
 ## License
 
 MIT - See LICENSE file for details.

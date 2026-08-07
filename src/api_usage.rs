@@ -63,8 +63,8 @@ struct OAuthCredentials {
 pub enum ApiUsageResult {
     /// Valid, fresh data
     Ok(ApiUsageData),
-    /// Cache is too old and fetch failed - show error to user
-    StaleCache,
+    /// Fetch failed and no usable cached response exists.
+    Failed,
     /// API returned 429 - show rate limited indicator
     RateLimited,
     /// API not configured (no OAuth credentials) - show nothing
@@ -82,7 +82,7 @@ impl ApiUsageResult {
 
     pub fn error_label(&self) -> Option<&'static str> {
         match self {
-            ApiUsageResult::StaleCache => Some("api error"),
+            ApiUsageResult::Failed => Some("api error"),
             ApiUsageResult::RateLimited => Some("rate limited"),
             _ => None,
         }
@@ -152,7 +152,7 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
             if std::io::stderr().is_terminal() {
                 eprintln!("Failed to get API cache path: {:#}", e);
             }
-            return ApiUsageResult::StaleCache;
+            return ApiUsageResult::Failed;
         }
     };
 
@@ -167,7 +167,7 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
                 if std::io::stderr().is_terminal() {
                     eprintln!("Failed to fetch API usage: {:#}", e);
                 }
-                ApiUsageResult::StaleCache
+                ApiUsageResult::Failed
             }
         }
     }
@@ -594,7 +594,7 @@ mod tests {
     }
 
     /// A backoff envelope with no response (prior non-429 failure) must not be
-    /// detected as RateLimited — it becomes StaleCache in the caller.
+    /// detected as RateLimited — it becomes Failed in the caller.
     #[test]
     fn test_backoff_no_response_error_is_not_rate_limited() {
         let cache_dir = crate::paths::test_scratch_dir("api-usage-backoff");
@@ -677,7 +677,7 @@ mod tests {
                 .is_none()
         );
 
-        let stale = ApiUsageResult::StaleCache;
+        let stale = ApiUsageResult::Failed;
         assert!(
             stale
                 .data()

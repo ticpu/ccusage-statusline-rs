@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Create tarball
         run: |
@@ -26,7 +26,7 @@ jobs:
           git archive --format=tar --prefix=ccusage-statusline-rs-${VERSION}/ HEAD | xz -c > ccusage-statusline-rs-${VERSION}.tar.xz
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ccusage-statusline-rs-*.tar.xz
@@ -59,7 +59,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -102,6 +102,6 @@ jobs:
           mv target/${{ matrix.target }}/release/ccusage-statusline-rs${{ matrix.binary_ext }} ${{ matrix.artifact_name }}
 
       - name: Upload binary to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.artifact_name }}
