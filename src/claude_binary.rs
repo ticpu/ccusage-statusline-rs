@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use wait_timeout::ChildExt;
 
 use crate::cache::get_cache_dir;
 
@@ -74,23 +76,59 @@ fn save_version_cache(version: &str, mtime: u64) {
     }
 }
 
+/// How long `claude --version` may take before it is killed. It is the only
+/// unbounded wait in a render: a hung binary would otherwise hang the statusline.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Fetch version from `claude --version`
 fn fetch_claude_version() -> Option<String> {
-    let output = Command::new("claude")
+    let mut child = match Command::new("claude")
         .arg("--version")
-        .output()
-        .ok()?;
-
-    if !output
-        .status
-        .success()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
     {
+        Ok(c) => c,
+        Err(e) => {
+            // Not installed is the ordinary case and says nothing worth reporting.
+            if e.kind() != std::io::ErrorKind::NotFound && std::io::stderr().is_terminal() {
+                eprintln!("claude --version could not start: {e}");
+            }
+            return None;
+        }
+    };
+
+    let status = match child.wait_timeout(VERSION_TIMEOUT) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            if std::io::stderr().is_terminal() {
+                eprintln!("claude --version timed out, skipping update check");
+            }
+            return None;
+        }
+        Err(e) => {
+            if std::io::stderr().is_terminal() {
+                eprintln!("claude --version failed: {e}");
+            }
+            return None;
+        }
+    };
+
+    if !status.success() {
         return None;
     }
 
-    let version_output = String::from_utf8(output.stdout).ok()?;
-    version_output
-        .split_whitespace()
+    let mut stdout = child
+        .stdout
+        .take()?;
+    let mut buf = String::new();
+    stdout
+        .read_to_string(&mut buf)
+        .ok()?;
+    buf.split_whitespace()
         .next()
         .map(String::from)
 }

@@ -26,6 +26,7 @@ path-slash = "0.2"
 which = "8"
 tempfile = "3.27"
 memchr = "2.8"
+wait-timeout = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }

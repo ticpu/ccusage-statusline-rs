@@ -89,9 +89,8 @@ fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
                 anyhow::bail!("GCS returned status: {}", response.status());
             }
 
-            let version = response
-                .text()
-                .context("Failed to read version")?;
+            let body = crate::http::read_body_limited(response, MAX_VERSION_BYTES)?;
+            let version = String::from_utf8(body).context("Version response is not UTF-8")?;
             Ok(version
                 .trim()
                 .to_string())
@@ -109,9 +108,9 @@ fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
                 anyhow::bail!("npm registry returned status: {}", response.status());
             }
 
-            let data: NpmRegistryResponse = response
-                .json()
-                .context("Failed to parse npm registry response")?;
+            let body = crate::http::read_body_limited(response, MAX_REGISTRY_BYTES)?;
+            let data: NpmRegistryResponse =
+                serde_json::from_slice(&body).context("Failed to parse npm registry response")?;
 
             Ok(data
                 .dist_tags
@@ -134,9 +133,7 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 }
 
 /// Determine which version channel to use based on enabled elements
-fn get_version_channel() -> Option<VersionChannel> {
-    let config = StatuslineConfig::load().ok()?;
-
+fn get_version_channel(config: &StatuslineConfig) -> Option<VersionChannel> {
     // Check which update element is enabled (prefer stable if both somehow enabled)
     if config
         .enabled_elements
@@ -153,11 +150,15 @@ fn get_version_channel() -> Option<VersionChannel> {
     }
 }
 
+/// A bare version string; the registry document is small but not fixed.
+const MAX_VERSION_BYTES: u64 = 4 * 1024;
+const MAX_REGISTRY_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Check if a Claude Code update is available.
 /// Returns Some(version) if an update is available, None otherwise.
 /// Caches results for 30 minutes per channel.
-pub fn check_update_available() -> Option<String> {
-    let channel = get_version_channel()?;
+pub fn check_update_available(config: &StatuslineConfig) -> Option<String> {
+    let channel = get_version_channel(config)?;
     let current = claude_binary::get_version()?;
 
     // Try to read cache first

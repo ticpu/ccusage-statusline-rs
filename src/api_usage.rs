@@ -89,6 +89,9 @@ impl ApiUsageResult {
     }
 }
 
+/// The usage document is a handful of numbers.
+const MAX_USAGE_BYTES: u64 = 1024 * 1024;
+
 /// Get API cache file path
 fn get_api_cache_path() -> Result<PathBuf> {
     let cache_dir = get_cache_dir()?;
@@ -437,9 +440,8 @@ fn fetch_api_response() -> Result<ApiResponse> {
         anyhow::bail!("API returned status: {}", status);
     }
 
-    response
-        .json()
-        .context("Failed to parse API response as JSON")
+    let body = crate::http::read_body_limited(response, MAX_USAGE_BYTES)?;
+    serde_json::from_slice(&body).context("Failed to parse API response as JSON")
 }
 
 #[cfg(test)]

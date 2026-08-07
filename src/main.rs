@@ -223,11 +223,38 @@ fn generate_statusline(
     let cache_dir = get_cache_dir()?;
     let plan_type = api_usage::get_plan_type();
     let thresholds = &statusline_config.thresholds;
-    let api_result = if statusline_config.needs_api() {
-        timing::phase("api", || api_usage::fetch_usage(&statusline_config.cache))
-    } else {
-        api_usage::ApiUsageResult::Unavailable
-    };
+
+    // The three fetches are independent and each is bounded by the HTTP client's own
+    // timeout. Run serially, a blackholed network costs their sum; concurrently, the
+    // render waits only for the slowest.
+    let (api_result, pricing, update_available) = timing::phase("fetches", || {
+        std::thread::scope(|scope| {
+            let api = scope.spawn(|| {
+                if statusline_config.needs_api() {
+                    timing::phase("api", || api_usage::fetch_usage(&statusline_config.cache))
+                } else {
+                    api_usage::ApiUsageResult::Unavailable
+                }
+            });
+            let pricing =
+                scope.spawn(|| timing::phase("pricing", || PricingFetcher::new(&cache_dir)));
+            let update = scope.spawn(|| {
+                timing::phase("update", || {
+                    claude_update::check_update_available(statusline_config)
+                })
+            });
+
+            (api.join(), pricing.join(), update.join())
+        })
+    });
+
+    // A panicked worker is a bug, not a runtime condition; surface it rather than
+    // rendering a plausible-looking line with a silently missing element.
+    let api_result = api_result.map_err(|_| anyhow::anyhow!("API usage worker panicked"))?;
+    let pricing = pricing.map_err(|_| anyhow::anyhow!("pricing worker panicked"))??;
+    let update_available =
+        update_available.map_err(|_| anyhow::anyhow!("update-check worker panicked"))?;
+
     let polled_api_usage = api_result
         .data()
         .cloned();
@@ -239,7 +266,6 @@ fn generate_statusline(
         polled_api_usage,
     )?;
 
-    let pricing = timing::phase("pricing", || PricingFetcher::new(&cache_dir))?;
     let claude_paths = find_claude_paths()?;
     let five_hour_reset = api_usage
         .as_ref()
@@ -257,7 +283,6 @@ fn generate_statusline(
         thresholds.burn_rate_show_ratio(),
     )?;
     let context_info = timing::phase("context", || calculate_context(hook_data))?;
-    let update_available = timing::phase("update", claude_update::check_update_available);
 
     let mut parts = Vec::new();
     let mut api_metrics_emitted = false;

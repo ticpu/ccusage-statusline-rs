@@ -13,6 +13,9 @@ struct PricingCache {
 use std::io::IsTerminal;
 use std::path::Path;
 
+/// The upstream table is a couple of megabytes and grows with every model added.
+const MAX_PRICING_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Pricing fetcher with caching
 pub struct PricingFetcher {
     models: HashMap<String, ModelPricing>,
@@ -64,10 +67,10 @@ impl PricingFetcher {
                     .status()
                     .is_success() =>
             {
+                let body = crate::http::read_body_limited(response, MAX_PRICING_BYTES)?;
                 let cache = PricingCache {
                     timestamp: Utc::now().timestamp(),
-                    models: response
-                        .json()
+                    models: serde_json::from_slice(&body)
                         .context("Failed to parse pricing JSON")?,
                 };
                 if let Err(e) = crate::cache::write_json_atomic(&pricing_cache_path, &cache)
