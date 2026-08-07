@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, IsTerminal, Read, Write};
+use std::io::{ErrorKind, IsTerminal, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tempfile::NamedTempFile;
@@ -98,6 +98,24 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|e| e.error)
         .with_context(|| format!("Failed to publish {}", path.display()))?;
     Ok(())
+}
+
+/// Open a cache file read-write, creating it private to the user.
+///
+/// The XDG_RUNTIME_DIR fallback lands in a world-readable /tmp, and these files hold
+/// the rendered statusline and usage percentages. The mode applies only on creation.
+pub fn open_private_rw(path: &Path) -> Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.read(true)
+        .write(true)
+        .create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+        .with_context(|| format!("Failed to open {}", path.display()))
 }
 
 /// Read and deserialize a JSON file. Returns `None` on NotFound, `Err` on other failures.
@@ -215,14 +233,11 @@ pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> R
     // would leave a 0-byte cache file that every later read has to reject.
     let mtime = path_mtime_secs(transcript_path)?;
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(cache_path)
-        .with_context(|| format!("Failed to open cache file {}", cache_path.display()))?;
+    let mut file = open_private_rw(cache_path)?;
 
     file.lock()?;
+    file.set_len(0)?;
+    file.rewind()?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -254,12 +269,10 @@ pub fn cleanup_stale_locks(cache_dir: &Path, ttl_secs: u64) {
 
     // Touch the marker first so concurrent invocations skip cleanup. A marker that
     // never lands (read-only cache dir) silently re-runs the scan on every render.
-    if let Err(e) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&marker)
-        && std::io::stderr().is_terminal()
+    if let Err(e) = open_private_rw(&marker).and_then(|f| {
+        f.set_len(0)
+            .context("truncate")
+    }) && std::io::stderr().is_terminal()
     {
         eprintln!(
             "Cache cleanup marker {} not writable, cleanup will rescan every run: {:#}",

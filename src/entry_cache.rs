@@ -2,7 +2,6 @@ use crate::types::UsageTokens;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
@@ -100,13 +99,7 @@ pub fn cache_path(cache_dir: &Path) -> PathBuf {
 /// that same descriptor: publishing by rename would strand concurrent renders on the
 /// unlinked file and lose whichever update finished first.
 pub fn with_cache<T>(path: &Path, f: impl FnOnce(&mut EntryCache) -> (T, bool)) -> Result<T> {
-    #[allow(clippy::suspicious_open_options)]
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(path)
-        .with_context(|| format!("Failed to open entry cache {}", path.display()))?;
+    let mut file = crate::cache::open_private_rw(path)?;
 
     file.lock()
         .with_context(|| format!("Failed to lock entry cache {}", path.display()))?;

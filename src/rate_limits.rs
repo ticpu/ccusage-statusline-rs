@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{ErrorKind, IsTerminal, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
@@ -51,12 +51,7 @@ fn merge_window(slot: &mut Option<StoredRateLimitWindow>, new: StoredRateLimitWi
 
 /// Merge stdin reading into the store, update if it supersedes
 fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Result<()> {
-    #[allow(clippy::suspicious_open_options)]
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(store_path)?;
+    let mut file = crate::cache::open_private_rw(store_path)?;
 
     file.lock()?;
 

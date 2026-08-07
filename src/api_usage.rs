@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, IsTerminal, Read};
+use std::io::{ErrorKind, IsTerminal, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -196,7 +196,7 @@ fn fetch_usage_with_lock(
 
     match file.try_lock() {
         Ok(()) => {
-            let result = fetch_or_use_cache(&mut file, cache_path, cache_settings);
+            let result = fetch_or_use_cache(&mut file, cache_settings);
             file.unlock()?;
             result
         }
@@ -214,11 +214,7 @@ fn fetch_usage_with_lock(
     }
 }
 
-fn fetch_or_use_cache(
-    file: &mut File,
-    cache_path: &Path,
-    cache_settings: &CacheSettings,
-) -> Result<ApiUsageData> {
+fn fetch_or_use_cache(file: &mut File, cache_settings: &CacheSettings) -> Result<ApiUsageData> {
     let metadata = file.metadata()?;
     let mtime_age = metadata
         .modified()?
@@ -239,13 +235,13 @@ fn fetch_or_use_cache(
         None
     };
 
-    core_fetch_or_use_cache(existing, mtime_age, cache_path, cache_settings)
+    core_fetch_or_use_cache(existing, mtime_age, file, cache_settings)
 }
 
 fn core_fetch_or_use_cache(
     existing: Option<CacheEnvelope>,
     mtime_age: Duration,
-    cache_path: &Path,
+    file: &mut File,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
     // Exponential backoff: min(refresh * 2^errors, max_backoff)
@@ -284,7 +280,7 @@ fn core_fetch_or_use_cache(
                 consecutive_errors: 0,
                 response: Some(api_response),
             };
-            write_envelope(&envelope, cache_path)?;
+            write_envelope_locked(file, &envelope)?;
             Ok(data)
         }
         Err(fetch_err) => {
@@ -319,7 +315,7 @@ fn core_fetch_or_use_cache(
                     env.consecutive_errors, next_backoff, fetch_err
                 );
             }
-            write_envelope(&env, cache_path)?;
+            write_envelope_locked(file, &env)?;
             if let Some(data) = stale {
                 Ok(data)
             } else {
@@ -329,8 +325,33 @@ fn core_fetch_or_use_cache(
     }
 }
 
+/// Write through the descriptor the caller already holds the exclusive lock on.
+///
+/// Readers of this file take a shared lock on it, so publishing by rename would leave
+/// them holding a lock on the unlinked inode and reading pre-rename content.
+fn write_envelope_locked(file: &mut File, envelope: &CacheEnvelope) -> Result<()> {
+    let json = serde_json::to_string(envelope)?;
+    file.set_len(0)?;
+    file.rewind()?;
+    file.write_all(json.as_bytes())?;
+    file.sync_data()?;
+    Ok(())
+}
+
+/// Open, lock and write in place. Seeds cache files for tests, which do not hold a lock.
+#[cfg(test)]
 fn write_envelope(envelope: &CacheEnvelope, cache_path: &Path) -> Result<()> {
-    crate::cache::write_json_atomic(cache_path, envelope)
+    #[allow(clippy::suspicious_open_options)]
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(cache_path)
+        .with_context(|| format!("Failed to open API cache {}", cache_path.display()))?;
+    file.lock()?;
+    let result = write_envelope_locked(&mut file, envelope);
+    file.unlock()?;
+    result
 }
 
 fn now_epoch() -> u64 {
@@ -453,7 +474,7 @@ mod tests {
         }
     }
 
-    /// write_envelope uses atomic rename; concurrent readers must never see partial data.
+    /// Concurrent readers must never observe a half-written envelope.
     #[test]
     fn test_atomic_write_preserves_valid_data() {
         let cache_dir = crate::paths::test_scratch_dir("api-usage-atomic");
@@ -581,11 +602,17 @@ mod tests {
         let envelope = make_error_envelope(1);
         write_envelope(&envelope, &cache_path).unwrap();
 
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&cache_path)
+            .unwrap();
+
         // mtime_age near-zero → within the 600s backoff window for 1 prior error
         let result = core_fetch_or_use_cache(
             Some(envelope),
             Duration::from_millis(1),
-            &cache_path,
+            &mut file,
             &settings,
         );
 
