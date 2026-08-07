@@ -174,36 +174,43 @@ fn fetch_usage_with_lock(
     cache_path: &Path,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
-    // Only open existing file — don't create an empty one
-    match OpenOptions::new()
+    // Materialize the cache file first so every caller reaches the lock below. Taking
+    // the cold-start fetch unlocked let N concurrent statuslines each call the API,
+    // which is the surest way to earn the 429 the backoff logic exists to handle.
+    if let Err(e) = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(cache_path)
+        && e.kind() != ErrorKind::AlreadyExists
+    {
+        return Err(e)
+            .with_context(|| format!("Failed to create API cache {}", cache_path.display()));
+    }
+
+    let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(cache_path)
-    {
-        Ok(mut file) => match file.try_lock() {
-            Ok(()) => {
-                let result = fetch_or_use_cache(&mut file, cache_path, cache_settings);
-                file.unlock()?;
-                result
-            }
-            Err(TryLockError::WouldBlock) => {
-                file.lock_shared()?;
-                let result = read_envelope_from_file(&mut file);
-                file.unlock()?;
-                let envelope =
-                    result.context("Cache unavailable while another process is fetching")?;
-                let response = envelope
-                    .response
-                    .context("Cache has no response data yet")?;
-                Ok(parse_api_response(&response))
-            }
-            Err(TryLockError::Error(e)) => Err(e.into()),
-        },
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            // No cache file — first run; share the same core as the exclusive-lock path
-            core_fetch_or_use_cache(None, Duration::MAX, cache_path, cache_settings)
+        .with_context(|| format!("Failed to open API cache {}", cache_path.display()))?;
+
+    match file.try_lock() {
+        Ok(()) => {
+            let result = fetch_or_use_cache(&mut file, cache_path, cache_settings);
+            file.unlock()?;
+            result
         }
-        Err(e) => Err(e.into()),
+        Err(TryLockError::WouldBlock) => {
+            file.lock_shared()?;
+            let result = read_envelope_from_file(&mut file);
+            file.unlock()?;
+            let envelope = result.context("Cache unavailable while another process is fetching")?;
+            let response = envelope
+                .response
+                .context("Cache has no response data yet")?;
+            Ok(parse_api_response(&response))
+        }
+        Err(TryLockError::Error(e)) => Err(e.into()),
     }
 }
 
@@ -266,9 +273,7 @@ fn core_fetch_or_use_cache(
             // Do not report this as "rate limited" — the original failure was something else.
             anyhow::bail!("no API data: in backoff after prior fetch failure");
         }
-        // existing is None AND within backoff: cannot occur in production
-        // (the NotFound path always passes mtime_age = Duration::MAX).
-        // Fall through to fetch as a safe default.
+        // No envelope yet (cold start just created the file): fall through and fetch.
     }
 
     match fetch_api_response() {
