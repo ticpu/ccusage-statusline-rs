@@ -142,7 +142,29 @@ impl Default for Thresholds {
     }
 }
 
+/// Upper bound the interactive menu enforces; a hand-edited file can exceed it.
+const THRESHOLD_MAX: u32 = 200;
+
 impl Thresholds {
+    /// Clamp values a hand-edited file can hold but the menu would have rejected.
+    /// An out-of-range threshold otherwise silently disables the element it governs.
+    fn clamp_reporting(&mut self) {
+        for (name, value) in [
+            ("burn_rate_show", &mut self.burn_rate_show),
+            ("burn_rate_warning", &mut self.burn_rate_warning),
+            ("burn_rate_danger", &mut self.burn_rate_danger),
+            ("context_warning", &mut self.context_warning),
+            ("context_danger", &mut self.context_danger),
+        ] {
+            if *value > THRESHOLD_MAX {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("config: {name} is {value}, clamping to {THRESHOLD_MAX}",);
+                }
+                *value = THRESHOLD_MAX;
+            }
+        }
+    }
+
     pub fn burn_rate_show_ratio(&self) -> f64 {
         self.burn_rate_show as f64 / 100.0
     }
@@ -190,8 +212,32 @@ fn default_true() -> bool {
     true
 }
 
+/// Drop unrecognised element names instead of failing the list.
+///
+/// A single typo would otherwise fail the whole enum, and the caller's fallback then
+/// silently replaces every setting in the file with defaults.
+fn deserialize_elements<'de, D>(deserializer: D) -> Result<Vec<StatusElement>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    let mut out = Vec::with_capacity(raw.len());
+    for value in raw {
+        match serde_json::from_value::<StatusElement>(value.clone()) {
+            Ok(element) => out.push(element),
+            Err(_) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("config: ignoring unknown statusline element {value}");
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatuslineConfig {
+    #[serde(deserialize_with = "deserialize_elements")]
     pub enabled_elements: Vec<StatusElement>,
     #[serde(default)]
     pub thresholds: Thresholds,
@@ -243,7 +289,12 @@ impl StatuslineConfig {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
         match serde_json::from_str::<Self>(&content) {
-            Ok(config) => Ok(config),
+            Ok(mut config) => {
+                config
+                    .thresholds
+                    .clamp_reporting();
+                Ok(config)
+            }
             Err(e) => {
                 if std::io::stderr().is_terminal() {
                     eprintln!("Config parse error ({}): {:#}", path.display(), e);
@@ -509,7 +560,7 @@ fn prompt_threshold(message: &str, current: u32) -> Result<Option<u32>> {
         .with_default(current)
         .with_error_message("Enter a number between 0 and 200")
         .with_validator(|val: &u32| {
-            if *val <= 200 {
+            if *val <= THRESHOLD_MAX {
                 Ok(inquire::validator::Validation::Valid)
             } else {
                 Ok(inquire::validator::Validation::Invalid(
@@ -527,4 +578,39 @@ fn print_help() {
         println!("  {}  {}", elem.label(), elem.description());
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One bad name must cost that entry, not the whole file.
+    #[test]
+    fn test_unknown_element_is_dropped_not_fatal() {
+        let json = r#"{"enabled_elements":["model","not_a_real_element","directory"],
+                       "thresholds":{"burn_rate_show":42},"show_emojis":false}"#;
+        let cfg: StatuslineConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            cfg.enabled_elements,
+            vec![StatusElement::Model, StatusElement::Directory]
+        );
+        // The rest of the file survived rather than reverting to defaults.
+        assert_eq!(
+            cfg.thresholds
+                .burn_rate_show,
+            42
+        );
+        assert!(!cfg.show_emojis);
+    }
+
+    #[test]
+    fn test_out_of_range_thresholds_are_clamped() {
+        let mut t = Thresholds {
+            burn_rate_show: 5_000,
+            ..Default::default()
+        };
+        t.clamp_reporting();
+        assert_eq!(t.burn_rate_show, THRESHOLD_MAX);
+    }
 }
