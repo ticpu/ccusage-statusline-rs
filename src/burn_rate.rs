@@ -85,6 +85,9 @@ pub fn calculate_burn_rate(
     })
 }
 
+/// Below this much elapsed window, the rate is not yet meaningful.
+const MIN_ELAPSED_HOURS: f64 = 0.25;
+
 fn calculate_limit_ratio(
     current_percent: f64,
     resets_at: Option<DateTime<Utc>>,
@@ -106,8 +109,10 @@ fn calculate_limit_ratio(
         return 0.0;
     }
 
+    // Just after a reset the elapsed slice approaches zero and any usage in it divides
+    // out to a nonsense rate — 2% spent with 4.99h left is not a 1000% burn rate.
     let api_elapsed_hours = block_duration_hours - hours_until_reset;
-    if api_elapsed_hours <= 0.0 {
+    if api_elapsed_hours < MIN_ELAPSED_HOURS {
         return 0.0;
     }
 

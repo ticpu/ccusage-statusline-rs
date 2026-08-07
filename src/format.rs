@@ -32,19 +32,18 @@ pub fn format_time_remaining_5h(
         return None;
     }
 
-    let block = block?;
-
     let now = Utc::now();
-    let remaining_hours = if let Some(reset_time) = api_usage
+    // The API reset time is authoritative and needs no local block; requiring one hid
+    // this element whenever the transcript scan found nothing.
+    let remaining_hours = match api_usage
         .and_then(|a| {
             a.five_hour
                 .as_ref()
         })
         .and_then(|w| w.resets_at)
     {
-        (reset_time - now).num_seconds() as f64 / 3600.0
-    } else {
-        block.hours_remaining
+        Some(reset_time) => (reset_time - now).num_seconds() as f64 / 3600.0,
+        None => block?.hours_remaining,
     };
 
     Some(format_hours_remaining(remaining_hours))
@@ -107,8 +106,11 @@ fn format_days_remaining(remaining_hours: f64) -> String {
         format!("📅{}d{}h", days, hours)
     } else if days > 0 {
         format!("📅{}d", days)
-    } else {
+    } else if hours > 0 {
         format!("📅{}h", hours)
+    } else {
+        // Under an hour, "0h" reads as expired rather than imminent.
+        format!("📅{}m", (remaining_hours * 60.0).ceil() as i64)
     }
 }
 
@@ -193,6 +195,19 @@ pub fn format_burn_rate_component(
     thresholds: &Thresholds,
 ) -> Option<String> {
     let is_subscription = matches!(plan_type, PlanType::Subscription);
+
+    // The show threshold gates visibility, which is what its name and the menu promise.
+    // A window already at its limit reports a zero ratio, so it is exempt: that is
+    // precisely when the element must not disappear. Cost-based display (Api plan) has
+    // no ratio to compare against and is always shown.
+    if is_subscription
+        && !burn_rate.is_at_limit
+        && burn_rate.ratio < thresholds.burn_rate_show_ratio()
+        && burn_rate.seven_day_ratio < thresholds.burn_rate_show_ratio()
+    {
+        return None;
+    }
+
     match display {
         BurnRateDisplay::Rate => Some(format_rate_display(burn_rate, plan_type, false, thresholds)),
         BurnRateDisplay::RateWithEta => Some(format_rate_display(
@@ -333,22 +348,15 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
 }
 
 /// Format context information
-pub fn format_context(context: Option<&ContextInfo>, thresholds: &Thresholds) -> String {
-    match context {
-        Some(info) => {
-            let pct_str = info
-                .percentage
-                .to_string();
-            let color = colorize_by_threshold(
-                &pct_str,
-                info.percentage as f64,
-                thresholds.context_warning as f64,
-                thresholds.context_danger as f64,
-            );
-            format!("{}k({}%)", info.tokens / 1000, color)
-        }
-        None => "N/A".to_string(),
-    }
+pub fn format_context(info: &ContextInfo, thresholds: &Thresholds) -> String {
+    let pct_str = format!("{}", info.percentage);
+    let color = colorize_by_threshold(
+        &pct_str,
+        info.percentage as f64,
+        thresholds.context_warning as f64,
+        thresholds.context_danger as f64,
+    );
+    format!("{}k({}%)", info.tokens / 1000, color)
 }
 
 /// Format amount as fixed two-decimal USD string
@@ -402,10 +410,6 @@ pub fn format_api_metrics_group(
     error_label: Option<&'static str>,
     api_usage: Option<&ApiUsageData>,
 ) -> Option<String> {
-    if let Some(label) = error_label {
-        return Some(format!("📊({})", label));
-    }
-
     let mut api_parts: Vec<String> = Vec::new();
 
     if enabled.contains(&StatusElement::ApiMetrics5h)
@@ -432,11 +436,12 @@ pub fn format_api_metrics_group(
         }
     }
 
-    if api_parts.is_empty() {
-        None
-    } else {
-        Some(api_parts.join(" "))
+    if !api_parts.is_empty() {
+        return Some(api_parts.join(" "));
     }
+    // The fetch may have failed while stdin still carried usable windows; the error
+    // label belongs here only when nothing else could be rendered.
+    error_label.map(|label| format!("📊({})", label))
 }
 
 pub fn strip_emojis(s: &str) -> String {
@@ -551,6 +556,51 @@ mod tests {
         assert_eq!(format_currency(0.0), "$0.00");
     }
 
+    /// A failed fetch must not discard windows stdin already supplied.
+    #[test]
+    fn test_api_group_prefers_real_data_over_error_label() {
+        use crate::types::UsageWindow;
+        let usage = ApiUsageData {
+            five_hour: Some(UsageWindow {
+                percent: 62.0,
+                resets_at: None,
+            }),
+            seven_day: None,
+            seven_day_sonnet: None,
+        };
+        let enabled = vec![StatusElement::ApiMetrics5h];
+
+        let with_data =
+            format_api_metrics_group(&enabled, Some("api error"), Some(&usage)).unwrap();
+        assert!(with_data.contains("62"), "got {with_data}");
+        assert!(!with_data.contains("api error"), "got {with_data}");
+
+        // Nothing to render: the error is the only thing left to say.
+        let without = format_api_metrics_group(&enabled, Some("api error"), None).unwrap();
+        assert_eq!(without, "📊(api error)");
+    }
+
+    /// The 5h countdown is driven by the API reset time, which needs no local block.
+    #[test]
+    fn test_time_remaining_5h_without_local_block() {
+        use crate::types::UsageWindow;
+        let usage = ApiUsageData {
+            five_hour: Some(UsageWindow {
+                percent: 10.0,
+                resets_at: Some(Utc::now() + Duration::hours(3)),
+            }),
+            seven_day: None,
+            seven_day_sonnet: None,
+        };
+        assert!(format_time_remaining_5h(None, Some(&usage), PlanType::Subscription).is_some());
+        assert!(format_time_remaining_5h(None, None, PlanType::Subscription).is_none());
+    }
+
+    #[test]
+    fn test_days_remaining_under_an_hour_shows_minutes() {
+        assert_eq!(format_days_remaining(0.5), "📅30m");
+    }
+
     #[test]
     fn test_format_burn_rate() {
         let safe_burn = BurnRate {
@@ -564,14 +614,31 @@ mod tests {
             format_burn_rate_component(&safe_burn, PlanType::Api, BurnRateDisplay::Rate, &t)
                 .unwrap();
         assert!(rate_api.contains("$1.50/h"));
+        // A subscription burning at half the safe rate is below the show threshold and
+        // renders nothing; the Api plan has no ratio to gate on and still shows cost.
+        assert!(
+            format_burn_rate_component(
+                &safe_burn,
+                PlanType::Subscription,
+                BurnRateDisplay::Rate,
+                &t,
+            )
+            .is_none()
+        );
+
+        let shown_burn = BurnRate {
+            ratio: 0.85,
+            critical_limit: LimitType::FiveHour,
+            ..Default::default()
+        };
         let rate_sub = format_burn_rate_component(
-            &safe_burn,
+            &shown_burn,
             PlanType::Subscription,
             BurnRateDisplay::Rate,
             &t,
         )
         .unwrap();
-        assert!(rate_sub.contains("50%"));
+        assert!(rate_sub.contains("85%"));
 
         let warning_burn = BurnRate {
             cost_per_hour: 10.0,

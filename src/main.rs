@@ -51,7 +51,7 @@ enum Commands {
     Uninstall,
     /// Test the statusline with most recent transcript
     Test,
-    /// Configure statusline elements (enable/disable and reorder)
+    /// Configure statusline elements and thresholds
     Config,
 }
 
@@ -332,7 +332,7 @@ fn generate_statusline(
             }
             StatusElement::Context => {
                 if let Some(ctx) = context_info.as_ref() {
-                    parts.push(format!("🧠{}", format_context(Some(ctx), thresholds)));
+                    parts.push(format!("🧠{}", format_context(ctx, thresholds)));
                 }
             }
             StatusElement::ApiMetrics5h
