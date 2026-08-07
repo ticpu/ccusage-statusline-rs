@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
@@ -71,9 +71,13 @@ pub fn iter_jsonl_files(claude_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     iter_jsonl_files_since(claude_paths, None)
 }
 
-/// Like `iter_jsonl_files` but skips project directories whose mtime is older
-/// than `min_mtime_secs` (Unix timestamp). Avoids `read_dir` on stale dirs,
-/// which is the main source of latency when many projects exist.
+/// Like `iter_jsonl_files` but skips transcripts whose mtime is older than
+/// `min_mtime_secs` (Unix timestamp).
+///
+/// The cutoff is applied per file, never per directory: a directory's mtime only
+/// moves when an entry is added or removed, so a session opened hours ago and still
+/// being appended to sits under a stale project mtime and would be pruned while
+/// actively spending tokens.
 pub fn iter_jsonl_files_since(
     claude_paths: &[PathBuf],
     min_mtime_secs: Option<i64>,
@@ -84,40 +88,63 @@ pub fn iter_jsonl_files_since(
         for project_entry in fs::read_dir(base_path)
             .with_context(|| format!("Failed to read directory: {}", base_path.display()))?
         {
-            let project_entry = project_entry?;
-            let project_path = project_entry.path();
+            let project_path = project_entry?.path();
             if !project_path.is_dir() {
                 continue;
             }
-
-            if let Some(cutoff) = min_mtime_secs {
-                let mtime = project_entry
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| {
-                        t.duration_since(std::time::UNIX_EPOCH)
-                            .ok()
-                    })
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(i64::MAX);
-                if mtime < cutoff {
-                    continue;
-                }
-            }
-
-            for session_entry in fs::read_dir(&project_path)? {
-                let session_path = session_entry?.path();
-                if session_path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    == Some("jsonl")
-                {
-                    files.push(session_path);
-                }
-            }
+            collect_jsonl_files(&project_path, min_mtime_secs, &mut files)?;
         }
     }
 
     Ok(files)
+}
+
+/// Collect `*.jsonl` under `dir`, descending into subdirectories. Sub-agent
+/// transcripts live at `<project>/<session-uuid>/subagents/agent-*.jsonl`, and their
+/// tokens are billed to the same block as the orchestrator's.
+fn collect_jsonl_files(
+    dir: &Path,
+    min_mtime_secs: Option<i64>,
+    files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    for entry in
+        fs::read_dir(dir).with_context(|| format!("Failed to read directory: {}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to stat {}", path.display()))?;
+
+        if file_type.is_dir() {
+            collect_jsonl_files(&path, min_mtime_secs, files)?;
+            continue;
+        }
+
+        if path
+            .extension()
+            .and_then(|s| s.to_str())
+            != Some("jsonl")
+        {
+            continue;
+        }
+
+        if let Some(cutoff) = min_mtime_secs {
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .with_context(|| format!("Failed to read mtime of {}", path.display()))?
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(i64::MAX);
+            if mtime < cutoff {
+                continue;
+            }
+        }
+
+        files.push(path);
+    }
+
+    Ok(())
 }

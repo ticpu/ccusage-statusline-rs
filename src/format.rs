@@ -76,8 +76,13 @@ fn format_hours_remaining(remaining_hours: f64) -> String {
         return format!("{}0h", get_clock_emoji(0.0));
     }
 
-    let hours = remaining_hours.floor() as i64;
-    let mins = ((remaining_hours - hours as f64) * 60.0).round() as i64;
+    let mut hours = remaining_hours.floor() as i64;
+    // Rounding the remainder can reach a full 60, which would render as "2h60m"
+    let mut mins = ((remaining_hours - hours as f64) * 60.0).round() as i64;
+    if mins == 60 {
+        hours += 1;
+        mins = 0;
+    }
     let clock = get_clock_emoji(remaining_hours);
 
     if hours > 0 && mins > 0 {
@@ -121,8 +126,13 @@ fn format_eta(duration: Duration) -> String {
     } else if total_hours < 24.0 {
         format!("{}h", total_hours.round() as i64)
     } else {
-        let days = (total_hours / 24.0).floor() as i64;
-        let hours = (total_hours - days as f64 * 24.0).round() as i64;
+        let mut days = (total_hours / 24.0).floor() as i64;
+        // Rounding the remainder can reach a full 24, which would render as "1d24h"
+        let mut hours = (total_hours - days as f64 * 24.0).round() as i64;
+        if hours == 24 {
+            days += 1;
+            hours = 0;
+        }
         if hours > 0 {
             format!("{}d{}h", days, hours)
         } else {
@@ -133,7 +143,12 @@ fn format_eta(duration: Duration) -> String {
 
 /// Compute ETA as reset_in scaled down by ratio (time to hit limit at current burn rate)
 fn scaled_eta(reset_in: Duration, ratio: f64) -> Duration {
-    Duration::seconds((reset_in.num_seconds() as f64 / ratio) as i64)
+    // A zero or NaN ratio divides to infinity, which saturates to i64::MAX seconds;
+    // chrono's Duration::seconds panics on that rather than saturating.
+    if ratio.is_nan() || ratio <= 0.0 {
+        return reset_in;
+    }
+    Duration::try_seconds((reset_in.num_seconds() as f64 / ratio) as i64).unwrap_or(reset_in)
 }
 
 /// Color a string red/yellow/green based on value vs warning and danger thresholds
@@ -457,6 +472,34 @@ pub fn format_directory(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_scaled_eta_non_positive_ratio_does_not_panic() {
+        let reset_in = Duration::hours(3);
+        assert_eq!(scaled_eta(reset_in, 0.0), reset_in);
+        assert_eq!(scaled_eta(reset_in, -1.0), reset_in);
+        assert_eq!(scaled_eta(reset_in, f64::NAN), reset_in);
+        assert_eq!(scaled_eta(reset_in, f64::MIN_POSITIVE), reset_in);
+    }
+
+    #[test]
+    fn test_scaled_eta_scales_by_ratio() {
+        assert_eq!(scaled_eta(Duration::hours(4), 2.0), Duration::hours(2));
+    }
+
+    #[test]
+    fn test_format_hours_remaining_carries_rounded_minutes() {
+        assert!(
+            format_hours_remaining(2.99999).ends_with("3h"),
+            "got {}",
+            format_hours_remaining(2.99999)
+        );
+    }
+
+    #[test]
+    fn test_format_eta_carries_rounded_hours() {
+        assert_eq!(format_eta(Duration::minutes(47 * 60 + 59)), "2d");
+    }
 
     #[test]
     fn test_decimal_to_block_zero() {

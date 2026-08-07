@@ -55,6 +55,11 @@ fn context_from_window(cw: &ContextWindowData) -> Option<ContextInfo> {
 }
 
 fn is_1m_context_model(model_id: &str) -> bool {
+    // The `[1m]` suffix is itself the 1M-context marker: models that only reach 1M
+    // in that mode (Sonnet 4.5) carry it, so stripping it loses the answer.
+    if model_id.ends_with("[1m]") {
+        return true;
+    }
     let base = model_id
         .split('[')
         .next()
@@ -282,6 +287,18 @@ mod tests {
         assert_eq!(
             select_context_limit(Some("claude-opus-4-6"), Some(&compacted_config())),
             EXTENDED_CONTEXT_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_select_limit_1m_suffix_on_200k_model() {
+        assert_eq!(
+            select_context_limit(Some("claude-sonnet-4-5-20250929[1m]"), None),
+            EXTENDED_CONTEXT_LIMIT
+        );
+        assert_eq!(
+            select_context_limit(Some("claude-sonnet-4-5-20250929"), None),
+            COMPACTED_CONTEXT_LIMIT
         );
     }
 

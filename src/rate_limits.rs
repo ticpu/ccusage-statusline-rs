@@ -221,7 +221,10 @@ fn effective_window(
             percent: s.used_percentage,
             resets_at: Some(s.resets_at),
         }),
-        (None, Some(a)) => Some(a),
+        (None, Some(a)) => a
+            .resets_at
+            .is_none_or(|ar| ar > now)
+            .then_some(a),
         (None, None) => None,
     }
 }
