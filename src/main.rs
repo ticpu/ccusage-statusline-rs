@@ -56,9 +56,11 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    // Only fails if a provider is already installed, which cannot happen on the single
+    // call in a fresh process.
     rustls::crypto::ring::default_provider()
         .install_default()
-        .expect("failed to install rustls crypto provider");
+        .expect("rustls crypto provider already installed");
 
     let cli = Cli::parse();
 

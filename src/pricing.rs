@@ -45,18 +45,13 @@ impl PricingFetcher {
             }
         };
 
-        // Determine freshness without consuming `cached`
-        let is_fresh = cached
-            .as_ref()
-            .map(|c| Utc::now().timestamp() - c.timestamp < Self::MAX_AGE_SECONDS)
-            .unwrap_or(false);
-
-        if is_fresh {
-            // Move out without clone — cached is consumed here
-            return Ok(cached
-                .unwrap()
-                .models);
-        }
+        // Return a fresh cache by move; otherwise keep it as the stale fallback below.
+        let cached = match cached {
+            Some(c) if Utc::now().timestamp() - c.timestamp < Self::MAX_AGE_SECONDS => {
+                return Ok(c.models);
+            }
+            other => other,
+        };
 
         match crate::http::http_client()?
             .get(Self::LITELLM_URL)
