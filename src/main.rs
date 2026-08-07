@@ -12,6 +12,7 @@ mod install;
 mod paths;
 mod pricing;
 mod rate_limits;
+mod timing;
 mod types;
 
 use anyhow::{Context, Result};
@@ -222,7 +223,7 @@ fn generate_statusline(
     let plan_type = api_usage::get_plan_type();
     let thresholds = &statusline_config.thresholds;
     let api_result = if statusline_config.needs_api() {
-        api_usage::fetch_usage(&statusline_config.cache)
+        timing::phase("api", || api_usage::fetch_usage(&statusline_config.cache))
     } else {
         api_usage::ApiUsageResult::Unavailable
     };
@@ -237,16 +238,16 @@ fn generate_statusline(
         polled_api_usage,
     )?;
 
-    let pricing = PricingFetcher::new(&cache_dir)?;
+    let pricing = timing::phase("pricing", || PricingFetcher::new(&cache_dir))?;
     let claude_paths = find_claude_paths()?;
-    let block = find_active_block(&claude_paths, &pricing)?;
+    let block = timing::phase("block", || find_active_block(&claude_paths, &pricing))?;
     let burn_rate = calculate_burn_rate(
         block.as_ref(),
         api_usage.as_ref(),
         thresholds.burn_rate_show_ratio(),
     )?;
-    let context_info = calculate_context(hook_data)?;
-    let update_available = claude_update::check_update_available();
+    let context_info = timing::phase("context", || calculate_context(hook_data))?;
+    let update_available = timing::phase("update", claude_update::check_update_available);
 
     let mut parts = Vec::new();
     let mut api_metrics_emitted = false;
