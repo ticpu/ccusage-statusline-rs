@@ -4,7 +4,10 @@ Version lives ONLY in Cargo.toml; PKGBUILD and Makefile auto-extract it. Never e
 
 If $ARGUMENTS names a version or bump level (patch/minor/major), use it; otherwise ask which bump is wanted before touching anything.
 
-1. Preflight: working tree clean, on master, latest master CI run green (`gh run list --branch master --limit 1`).
+1. Preflight: working tree clean, on master, and CI green **for the commits being released** — not merely for whatever master last ran. Check both:
+   - `git rev-list --count @{upstream}..HEAD` — unpushed commits.
+   - `gh run list --branch master --limit 1` — and confirm the run's commit is HEAD.
+   If anything is unpushed, push it and wait for CI to go green **before** touching the version. A failing CI then costs nothing; a failing CI after the release commit leaves a `release:` commit on master that never shipped, which has to be unwound by hand.
 2. Edit `version` in Cargo.toml.
 3. `cargo fmt && cargo clippy --fix --allow-dirty --message-format=short`
 4. `cargo test --release --message-format=short`
