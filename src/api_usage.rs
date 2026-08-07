@@ -451,9 +451,7 @@ mod tests {
     /// write_envelope uses atomic rename; concurrent readers must never see partial data.
     #[test]
     fn test_atomic_write_preserves_valid_data() {
-        let cache_dir =
-            std::env::temp_dir().join(format!("ccusage-test-atomic-{}", std::process::id()));
-        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-atomic");
         let cache_path = cache_dir.join("api-usage-cache.json");
 
         let initial = make_test_envelope(50.0, 25.0, 0);
@@ -488,9 +486,7 @@ mod tests {
     /// lock, blocks until the writer releases, then returns the cached response.
     #[test]
     fn test_shared_lock_readers_wait_for_valid_data() {
-        let cache_dir =
-            std::env::temp_dir().join(format!("ccusage-test-shared-{}", std::process::id()));
-        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-shared");
         let cache_path = Arc::new(cache_dir.join("api-usage-cache.json"));
         let settings = CacheSettings::default();
 
@@ -536,9 +532,7 @@ mod tests {
     /// Concurrent callers with fresh cached data all get valid results — no network needed.
     #[test]
     fn test_concurrent_fetch_all_return_cached_data() {
-        let cache_dir =
-            std::env::temp_dir().join(format!("ccusage-test-concurrent-{}", std::process::id()));
-        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-concurrent");
         let cache_path = Arc::new(cache_dir.join("api-usage-cache.json"));
         let settings = CacheSettings::default();
 
@@ -575,9 +569,7 @@ mod tests {
     /// detected as RateLimited — it becomes StaleCache in the caller.
     #[test]
     fn test_backoff_no_response_error_is_not_rate_limited() {
-        let cache_dir =
-            std::env::temp_dir().join(format!("ccusage-test-backoff-{}", std::process::id()));
-        fs::create_dir_all(&cache_dir).unwrap();
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-backoff");
         let cache_path = cache_dir.join("api-usage-cache.json");
         let settings = CacheSettings::default();
 

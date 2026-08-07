@@ -322,8 +322,7 @@ mod tests {
 
     #[test]
     fn test_transcript_compacted_limit() {
-        let dir = std::env::temp_dir().join("ccusage-test-ctx-compacted");
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::paths::test_scratch_dir("ctx-compacted");
         let path = dir.join("session.jsonl");
         // tokens: input=10, cache_creation=500, cache_read=95000 → total=95510
         write_jsonl(
@@ -354,8 +353,7 @@ mod tests {
 
     #[test]
     fn test_transcript_1m_model_limit() {
-        let dir = std::env::temp_dir().join("ccusage-test-ctx-1m");
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::paths::test_scratch_dir("ctx-1m");
         let path = dir.join("session.jsonl");
         write_jsonl(
             &path,
@@ -384,8 +382,7 @@ mod tests {
 
     #[test]
     fn test_transcript_multiple_entries_last_wins() {
-        let dir = std::env::temp_dir().join("ccusage-test-ctx-multi");
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::paths::test_scratch_dir("ctx-multi");
         let path = dir.join("session.jsonl");
         write_jsonl(
             &path,
@@ -410,8 +407,7 @@ mod tests {
 
     #[test]
     fn test_transcript_empty_file() {
-        let dir = std::env::temp_dir().join("ccusage-test-ctx-empty");
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::paths::test_scratch_dir("ctx-empty");
         let path = dir.join("session.jsonl");
         write_jsonl(&path, &[]);
 

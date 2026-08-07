@@ -55,6 +55,18 @@ pub fn find_claude_paths() -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// Per-test scratch directory under `target/`, kept off `/tmp` so a predictable
+/// name in a world-writable dir cannot be pre-created by another user. The pid
+/// suffix keeps concurrent `cargo test` runs from sharing one directory.
+#[cfg(test)]
+pub fn test_scratch_dir(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/test-scratch")
+        .join(format!("{}-{}", name, std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 pub fn iter_jsonl_files(claude_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     iter_jsonl_files_since(claude_paths, None)
 }

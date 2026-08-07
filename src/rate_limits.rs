@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::cache::get_cache_dir;
 use crate::types::{ApiUsageData, RateLimits, UsageWindow};
@@ -22,15 +22,6 @@ struct RateLimitsStore {
 }
 
 fn get_store_path() -> Result<PathBuf> {
-    #[cfg(test)]
-    if let Ok(test_path) = std::env::var("CCUSAGE_TEST_STORE_PATH") {
-        let path = PathBuf::from(test_path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        return Ok(path);
-    }
-
     let cache_dir = get_cache_dir()?;
     Ok(cache_dir.join("rate-limits-latest.json"))
 }
@@ -59,15 +50,13 @@ fn merge_window(slot: &mut Option<StoredRateLimitWindow>, new: StoredRateLimitWi
 }
 
 /// Merge stdin reading into the store, update if it supersedes
-fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
-    let store_path = get_store_path()?;
-
+fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Result<()> {
     #[allow(clippy::suspicious_open_options)]
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
-        .open(&store_path)?;
+        .open(store_path)?;
 
     file.lock()?;
 
@@ -110,7 +99,7 @@ fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
     }
 
     if updated {
-        crate::cache::write_json_atomic(&store_path, &store)?;
+        crate::cache::write_json_atomic(store_path, &store)?;
     }
 
     file.unlock()?;
@@ -118,10 +107,8 @@ fn merge_and_update_store(stdin_limits: &RateLimits) -> Result<()> {
 }
 
 /// Read the freshest stored readings, discarding expired windows
-fn read_store() -> Result<RateLimitsStore> {
-    let store_path = get_store_path()?;
-
-    let mut file = match File::open(&store_path) {
+fn read_store_at(store_path: &Path) -> Result<RateLimitsStore> {
+    let mut file = match File::open(store_path) {
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             return Ok(RateLimitsStore::default());
@@ -176,10 +163,11 @@ pub fn merge_and_get_effective_usage(
     stdin_limits: Option<&RateLimits>,
     api_usage: Option<ApiUsageData>,
 ) -> Result<Option<ApiUsageData>> {
+    let store_path = get_store_path()?;
     if let Some(limits) = stdin_limits {
-        merge_and_update_store(limits)?;
+        merge_and_update_store_at(limits, &store_path)?;
     }
-    let store = read_store()?;
+    let store = read_store_at(&store_path)?;
     Ok(merge_store_with_api_usage(&store, api_usage))
 }
 
@@ -376,8 +364,7 @@ mod tests {
 
     #[test]
     fn test_merge_order_independent() {
-        let temp_dir = std::env::temp_dir().join("ccusage-test-merge-order");
-        fs::create_dir_all(&temp_dir).unwrap();
+        let temp_dir = crate::paths::test_scratch_dir("rate-limits-merge-order");
 
         let reading_a = RateLimits {
             five_hour: Some(crate::types::RateLimitWindow {
@@ -398,54 +385,33 @@ mod tests {
         let store_path_1 = temp_dir.join("test-merge-1.json");
         let store_path_2 = temp_dir.join("test-merge-2.json");
 
-        {
-            unsafe {
-                std::env::set_var(
-                    "CCUSAGE_TEST_STORE_PATH",
-                    store_path_1
-                        .to_str()
-                        .unwrap(),
-                );
-            }
-            merge_and_update_store(&reading_a).unwrap();
-            merge_and_update_store(&reading_b).unwrap();
-            let result_1 = read_store().unwrap();
+        merge_and_update_store_at(&reading_a, &store_path_1).unwrap();
+        merge_and_update_store_at(&reading_b, &store_path_1).unwrap();
+        let result_1 = read_store_at(&store_path_1).unwrap();
 
-            unsafe {
-                std::env::set_var(
-                    "CCUSAGE_TEST_STORE_PATH",
-                    store_path_2
-                        .to_str()
-                        .unwrap(),
-                );
-            }
-            merge_and_update_store(&reading_b).unwrap();
-            merge_and_update_store(&reading_a).unwrap();
-            let result_2 = read_store().unwrap();
+        merge_and_update_store_at(&reading_b, &store_path_2).unwrap();
+        merge_and_update_store_at(&reading_a, &store_path_2).unwrap();
+        let result_2 = read_store_at(&store_path_2).unwrap();
 
-            assert_eq!(
-                result_1
-                    .five_hour
-                    .as_ref()
-                    .map(|w| w.used_percentage),
-                result_2
-                    .five_hour
-                    .as_ref()
-                    .map(|w| w.used_percentage)
-            );
-            assert_eq!(
-                result_1
-                    .five_hour
-                    .as_ref()
-                    .unwrap()
-                    .used_percentage,
-                75.0
-            );
-        }
+        assert_eq!(
+            result_1
+                .five_hour
+                .as_ref()
+                .map(|w| w.used_percentage),
+            result_2
+                .five_hour
+                .as_ref()
+                .map(|w| w.used_percentage)
+        );
+        assert_eq!(
+            result_1
+                .five_hour
+                .as_ref()
+                .unwrap()
+                .used_percentage,
+            75.0
+        );
 
-        unsafe {
-            std::env::remove_var("CCUSAGE_TEST_STORE_PATH");
-        }
         fs::remove_dir_all(&temp_dir).unwrap();
     }
 }
