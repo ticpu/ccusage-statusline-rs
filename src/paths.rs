@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 pub fn home_dir() -> Result<PathBuf> {
@@ -92,59 +93,161 @@ pub fn iter_jsonl_files_since(
             if !project_path.is_dir() {
                 continue;
             }
-            collect_jsonl_files(&project_path, min_mtime_secs, &mut files)?;
+            collect_project(&project_path, min_mtime_secs, &mut files);
         }
     }
 
     Ok(files)
 }
 
-/// Collect `*.jsonl` under `dir`, descending into subdirectories. Sub-agent
-/// transcripts live at `<project>/<session-uuid>/subagents/agent-*.jsonl`, and their
-/// tokens are billed to the same block as the orchestrator's.
-fn collect_jsonl_files(
-    dir: &Path,
-    min_mtime_secs: Option<i64>,
-    files: &mut Vec<PathBuf>,
-) -> Result<()> {
-    for entry in
-        fs::read_dir(dir).with_context(|| format!("Failed to read directory: {}", dir.display()))?
-    {
-        let entry = entry?;
+/// Session transcripts sit directly in the project directory; a session's sub-agent
+/// transcripts sit under `<session>/subagents/`.
+///
+/// Sub-agent trees are only descended when the session itself is within the cutoff.
+/// Stat'ing every agent transcript that ever ran costs more than the whole render
+/// budget, and the orchestrator appends to its own transcript whenever a sub-agent
+/// reports back — so a session with stale mtime has no fresh agents beneath it.
+fn collect_project(project: &Path, min_mtime_secs: Option<i64>, files: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(project) {
+        Ok(e) => e,
+        Err(e) => {
+            warn_skipped(project, &e);
+            return;
+        }
+    };
+
+    let mut has_dirs = false;
+    let mut fresh_sessions: Vec<PathBuf> = Vec::new();
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                warn_skipped(project, &e);
+                continue;
+            }
+        };
         let path = entry.path();
 
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("Failed to stat {}", path.display()))?;
-
-        if file_type.is_dir() {
-            collect_jsonl_files(&path, min_mtime_secs, files)?;
-            continue;
-        }
-
-        if path
-            .extension()
-            .and_then(|s| s.to_str())
-            != Some("jsonl")
-        {
-            continue;
-        }
-
-        if let Some(cutoff) = min_mtime_secs {
-            let mtime = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .with_context(|| format!("Failed to read mtime of {}", path.display()))?
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(i64::MAX);
-            if mtime < cutoff {
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => {
+                has_dirs = true;
+                continue;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn_skipped(&path, &e);
                 continue;
             }
         }
 
-        files.push(path);
+        if !is_jsonl(&path) {
+            continue;
+        }
+        if entry_is_fresh(&entry, &path, min_mtime_secs) {
+            fresh_sessions.push(path.with_extension(""));
+            files.push(path);
+        }
     }
 
-    Ok(())
+    if !has_dirs {
+        return;
+    }
+
+    // Reached only for sessions whose own transcript is current, so this costs nothing
+    // on the stale majority and needs no extra stat to decide.
+    for session in fresh_sessions {
+        let subagents = session.join("subagents");
+        if subagents.is_dir() {
+            collect_jsonl_files(&subagents, min_mtime_secs, files);
+        }
+    }
+}
+
+fn is_jsonl(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        == Some("jsonl")
+}
+
+fn mtime_secs(meta: std::io::Result<std::fs::Metadata>) -> Option<i64> {
+    meta.and_then(|m| m.modified())
+        .ok()
+        .map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(i64::MAX)
+        })
+}
+
+fn entry_is_fresh(entry: &fs::DirEntry, path: &Path, min_mtime_secs: Option<i64>) -> bool {
+    let Some(cutoff) = min_mtime_secs else {
+        return true;
+    };
+    match mtime_secs(entry.metadata()) {
+        Some(mtime) => mtime >= cutoff,
+        None => {
+            warn_unstatable(path);
+            true
+        }
+    }
+}
+
+fn warn_unstatable(path: &Path) {
+    if std::io::stderr().is_terminal() {
+        eprintln!(
+            "transcript scan: cannot read mtime of {}, treating as current",
+            path.display()
+        );
+    }
+}
+
+/// Collect `*.jsonl` under `dir`, descending into subdirectories. Sub-agent
+/// transcripts live at `<project>/<session-uuid>/subagents/agent-*.jsonl`, and their
+/// tokens are billed to the same block as the orchestrator's.
+/// An unreadable entry anywhere under the tree must not fail the render, so every
+/// error here is reported and skipped: the cost is one missing transcript, not a
+/// blank statusline.
+fn collect_jsonl_files(dir: &Path, min_mtime_secs: Option<i64>, files: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            warn_skipped(dir, &e);
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                warn_skipped(dir, &e);
+                continue;
+            }
+        };
+        let path = entry.path();
+
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(e) => {
+                warn_skipped(&path, &e);
+                continue;
+            }
+        };
+
+        if file_type.is_dir() {
+            collect_jsonl_files(&path, min_mtime_secs, files);
+            continue;
+        }
+
+        if is_jsonl(&path) && entry_is_fresh(&entry, &path, min_mtime_secs) {
+            files.push(path);
+        }
+    }
+}
+
+pub fn warn_skipped(path: &Path, e: &std::io::Error) {
+    if std::io::stderr().is_terminal() {
+        eprintln!("transcript scan skipped {}: {}", path.display(), e);
+    }
 }
