@@ -74,8 +74,22 @@ A block anchors at the first entry after the previous block expired, which makes
 function of all earlier activity. Truncating the entry stream at a lookback horizon does not just
 drop old cost, it re-anchors the whole chain and moves the active block's start — corrupting both
 the cost and the reset countdown for exactly the continuous-use sessions the horizon was meant to
-keep cheap. Boundaries come from the authoritative reset time when one is available; otherwise the
-scan extends until it finds a gap long enough to end a block.
+keep cheap.
+
+Boundaries therefore come from the authoritative reset time whenever one is available. The derived
+chain is the fallback and is knowingly approximate: no horizon makes it exact on a continuously
+used account, and the ones that come close cost several times the render budget.
+
+## Transcripts are append-only, and everything fast depends on it
+
+Reading only a suffix, and resuming a parse from where the last one stopped, are both
+valid only while transcripts are extended rather than rewritten. A rewrite that leaves
+the file no shorter is undetectable and yields a wrong cost with no error, so anything
+editing a transcript in place must invalidate the parse cache explicitly.
+
+That cache holds token counts and dedup keys rather than costs: prices move
+independently of transcripts, and deduplication spans files so it cannot be re-derived
+from any one of them.
 
 ## A locked file is written in place; only unlocked ones are published by rename
 
