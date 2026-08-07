@@ -193,6 +193,7 @@ mod tests {
                 output_tokens: 0,
                 cache_creation_input_tokens: 5_000,
                 cache_read_input_tokens: 2_000,
+                cache_creation: None,
             }),
         };
         let info = context_from_window(&cw).unwrap();

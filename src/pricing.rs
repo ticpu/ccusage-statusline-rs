@@ -152,47 +152,46 @@ impl PricingFetcher {
     }
 }
 
-/// Fallback cost estimation with hardcoded prices (when model not found in LiteLLM)
+/// Cache rates are fixed multiples of the base input price, so a family only needs its
+/// two published per-token rates.
+const CACHE_WRITE_5M_MULTIPLIER: f64 = 1.25;
+const CACHE_WRITE_1H_MULTIPLIER: f64 = 2.0;
+const CACHE_READ_MULTIPLIER: f64 = 0.1;
+
+fn prices_from(input: f64, output: f64) -> TokenPrices {
+    TokenPrices {
+        input,
+        output,
+        cache_write: input * CACHE_WRITE_5M_MULTIPLIER,
+        cache_write_1h: input * CACHE_WRITE_1H_MULTIPLIER,
+        cache_read: input * CACHE_READ_MULTIPLIER,
+    }
+}
+
+/// Fallback cost estimation for a model LiteLLM does not list. Current models carry no
+/// above-threshold tier, so base and tiered prices are the same.
 fn estimate_cost_fallback(entry: &UsageData) -> f64 {
     let model = entry
         .message
         .model
-        .as_deref()
-        .unwrap_or("claude-sonnet-4-20250514");
+        .as_deref();
 
-    let pricing = if model.starts_with("claude-opus") {
-        let prices = TokenPrices {
-            input: 15e-6,
-            output: 75e-6,
-            cache_write: 18.75e-6,
-            cache_read: 1.5e-6,
-        };
-        ModelPricing::from_prices(prices, prices)
-    } else if model.starts_with("claude-sonnet-4-5") {
-        let prices = TokenPrices {
-            input: 3e-6,
-            output: 15e-6,
-            cache_write: 3.75e-6,
-            cache_read: 3e-7,
-        };
-        ModelPricing::from_prices(prices, prices)
-    } else {
-        let base = TokenPrices {
-            input: 3e-6,
-            output: 15e-6,
-            cache_write: 3.75e-6,
-            cache_read: 3e-7,
-        };
-        let tiered = TokenPrices {
-            input: 6e-6,
-            output: 22.5e-6,
-            cache_write: 7.5e-6,
-            cache_read: 6e-7,
-        };
-        ModelPricing::from_prices(base, tiered)
+    let prices = match model {
+        Some(m) if m.contains("opus") => prices_from(5e-6, 25e-6),
+        Some(m) if m.contains("haiku") => prices_from(1e-6, 5e-6),
+        Some(m) if m.contains("sonnet") => prices_from(3e-6, 15e-6),
+        other => {
+            if std::io::stderr().is_terminal() {
+                eprintln!(
+                    "pricing: {} not in LiteLLM and not a known family, estimating at Sonnet rates",
+                    other.unwrap_or("(no model id)")
+                );
+            }
+            prices_from(3e-6, 15e-6)
+        }
     };
 
-    pricing.calculate_cost(
+    ModelPricing::from_prices(prices, prices).calculate_cost(
         &entry
             .message
             .usage,
