@@ -199,7 +199,7 @@ fn run_test_mode() -> Result<()> {
             .to_string(),
         model: types::ModelInfo {
             id: None,
-            display_name: "Claude 3.5 Sonnet".to_string(),
+            display_name: "Opus 5".to_string(),
         },
         workspace: Some(types::Workspace {
             current_dir: std::env::current_dir()?
