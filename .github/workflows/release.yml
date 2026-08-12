@@ -2,8 +2,11 @@ name: Release
 
 on:
   push:
+    branches:
+      - 'ci/**'
     tags:
       - 'v*'
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -12,50 +15,65 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  GLIBC_MAX: '2.28'
+
 jobs:
-  create-release:
-    name: Create Release
+  linux-binaries:
+    name: Build ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            artifact_name: ccusage-statusline-rs-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            artifact_name: ccusage-statusline-rs-linux-aarch64
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Create tarball
+      - name: Build binary in Debian container
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          git archive --format=tar --prefix=ccusage-statusline-rs-${VERSION}/ HEAD | xz -c > ccusage-statusline-rs-${VERSION}.tar.xz
+          docker build -f Containerfile --build-arg TARGET=${{ matrix.target }} -t ccusage-build .
+          container=$(docker create ccusage-build)
+          docker cp "$container:/out/ccusage-statusline-rs" ${{ matrix.artifact_name }}
+          docker rm "$container"
+        env:
+          DOCKER_BUILDKIT: 1
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v3
+      - name: Check glibc floor
+        run: |
+          max=$(readelf -V ${{ matrix.artifact_name }} | grep -oE 'GLIBC_[0-9.]+' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "highest glibc symbol version required: ${max:-none}"
+          if [ "$(printf '%s\n%s\n' "$max" "$GLIBC_MAX" | sort -V | tail -1)" != "$GLIBC_MAX" ]; then
+            echo "binary requires glibc newer than $GLIBC_MAX" >&2
+            exit 1
+          fi
+
+      - name: Smoke-test binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: ./${{ matrix.artifact_name }} --version
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
         with:
-          files: |
-            ccusage-statusline-rs-*.tar.xz
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
 
-  build-binaries:
-    name: Build Binaries
-    needs: create-release
+  other-binaries:
+    name: Build ${{ matrix.target }}
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: ccusage-statusline-rs-linux-x86_64
-            binary_ext: ""
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact_name: ccusage-statusline-rs-linux-aarch64
-            binary_ext: ""
-          - os: ubuntu-latest
             target: x86_64-pc-windows-gnu
             artifact_name: ccusage-statusline-rs-windows-x86_64.exe
-            binary_ext: ".exe"
+            binary_ext: '.exe'
           - os: macos-15
             target: aarch64-apple-darwin
             artifact_name: ccusage-statusline-rs-macos-aarch64
-            binary_ext: ""
+            binary_ext: ''
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
@@ -66,14 +84,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu pkg-config
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
       - name: Install cross-compilation tools (windows-gnu)
         if: matrix.target == 'x86_64-pc-windows-gnu'
         run: |
@@ -83,25 +93,48 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
 
       - name: Build binary
-        run: cargo build --release --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          PKG_CONFIG_ALLOW_CROSS: 1
-
-      - name: Strip binary
-        run: |
-          case "${{ matrix.target }}" in
-            aarch64-unknown-linux-gnu) STRIP=aarch64-linux-gnu-strip ;;
-            x86_64-pc-windows-gnu) STRIP=x86_64-w64-mingw32-strip ;;
-            *) STRIP=strip ;;
-          esac
-          $STRIP target/${{ matrix.target }}/release/ccusage-statusline-rs${{ matrix.binary_ext }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: |
-          mv target/${{ matrix.target }}/release/ccusage-statusline-rs${{ matrix.binary_ext }} ${{ matrix.artifact_name }}
+        run: mv target/${{ matrix.target }}/release/ccusage-statusline-rs${{ matrix.binary_ext }} ${{ matrix.artifact_name }}
 
-      - name: Upload binary to release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    name: Create Release
+    needs:
+      - linux-binaries
+      - other-binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Create tarball
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          git archive --format=tar --prefix=ccusage-statusline-rs-${VERSION}/ HEAD | xz -c > ccusage-statusline-rs-${VERSION}.tar.xz
+
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
-          files: ${{ matrix.artifact_name }}
+          files: |
+            ccusage-statusline-rs-*.tar.xz
+            artifacts/*/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          append_body: true
+          body: |
+            The Linux binaries are built on Debian 10 (glibc 2.28), so they run on
+            Debian 10+, Ubuntu 18.10+, RHEL 8+ and anything newer.

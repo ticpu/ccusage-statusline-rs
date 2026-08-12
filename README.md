@@ -32,6 +32,19 @@ This project is a Rust reimplementation of the statusline feature from [ccusage]
 
 ## Installation
 
+### Prebuilt binaries
+
+Each [release](https://github.com/ticpu/ccusage-statusline-rs/releases) ships x86_64 and
+aarch64 Linux binaries, a Windows x86_64 executable and a macOS aarch64 binary. The Linux
+ones are built on Debian 10 (glibc 2.28) and run on Debian 10+, Ubuntu 18.10+, RHEL 8+ and
+anything newer.
+
+```bash
+wget https://github.com/ticpu/ccusage-statusline-rs/releases/latest/download/ccusage-statusline-rs-linux-x86_64
+sudo install -m0755 ccusage-statusline-rs-linux-x86_64 /usr/local/bin/ccusage-statusline-rs
+ccusage-statusline-rs install
+```
+
 ### Linux / macOS
 
 ```bash
