@@ -204,7 +204,11 @@ fn calculate_context_from_transcript(
         {
             continue;
         }
-        if let Ok(entry) = serde_json::from_str::<UsageData>(&line) {
+        if let Ok(entry) = serde_json::from_str::<UsageData>(&line)
+            && !entry
+                .message
+                .is_synthetic()
+        {
             last_tokens = Some(
                 entry
                     .message

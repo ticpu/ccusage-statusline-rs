@@ -237,6 +237,12 @@ fn parse_from(
         let Ok(entry) = serde_json::from_slice::<UsageData>(line) else {
             continue;
         };
+        if entry
+            .message
+            .is_synthetic()
+        {
+            continue;
+        }
         let Ok(ts) = DateTime::parse_from_rfc3339(&entry.timestamp) else {
             continue;
         };
@@ -522,6 +528,36 @@ mod tests {
             let mut f = fs::File::create(proj.join(name)).unwrap();
             writeln!(f, "{line}").unwrap();
         }
+
+        let entries = collect_entries(&[projects], now - Duration::hours(5), &root).unwrap();
+        assert_eq!(entries.len(), 1);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A synthetic message is not an API call, so it must not seed a block or be priced.
+    #[test]
+    fn test_synthetic_entries_excluded() {
+        let root = crate::paths::test_scratch_dir("blocks-synthetic");
+        let projects = root.join("projects");
+        let proj = projects.join("p");
+        fs::create_dir_all(&proj).unwrap();
+
+        let now = Utc::now();
+        let mut f = fs::File::create(proj.join("a.jsonl")).unwrap();
+        writeln!(
+            f,
+            "{}",
+            usage_line(&(now - Duration::minutes(10)), "1", 100)
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"timestamp":"{}","message":{{"model":"<synthetic>","usage":{{"input_tokens":0,"output_tokens":0}}}}}}"#,
+            (now - Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        )
+        .unwrap();
+        drop(f);
 
         let entries = collect_entries(&[projects], now - Duration::hours(5), &root).unwrap();
         assert_eq!(entries.len(), 1);

@@ -72,6 +72,19 @@ pub struct MessageData {
     pub usage: UsageTokens,
 }
 
+/// Model id Claude Code writes on assistant messages it generated locally.
+const SYNTHETIC_MODEL: &str = "<synthetic>";
+
+impl MessageData {
+    /// No API call backs a synthetic message: it is neither billed nor resident in the
+    /// context window, and its all-zero usage would read as a real measurement.
+    pub fn is_synthetic(&self) -> bool {
+        self.model
+            .as_deref()
+            == Some(SYNTHETIC_MODEL)
+    }
+}
+
 /// Per-TTL split of `cache_creation_input_tokens`. Long-TTL writes cost more, and the
 /// flat total cannot distinguish them.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
