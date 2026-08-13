@@ -183,7 +183,15 @@ pub fn merge_and_get_effective_usage(
     Ok(merge_store_with_api_usage(&store, api_usage))
 }
 
-/// Merge a stored window with an API window, preferring whichever supersedes; None if neither has valid data
+/// Reset times this far apart still name the same window: the endpoint reports sub-second
+/// precision and the stdin headers round to the second.
+const SAME_WINDOW_TOLERANCE: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
+
+fn same_window(a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
+    (a - b).abs() <= SAME_WINDOW_TOLERANCE
+}
+
+/// Merge a stored window with an API window; None if neither has valid data
 fn effective_window(
     store_win: Option<&StoredRateLimitWindow>,
     api_win: Option<UsageWindow>,
@@ -194,11 +202,7 @@ fn effective_window(
     match (valid_store, api_win) {
         (Some(s), Some(a)) => match a.resets_at {
             Some(ar) if ar > now => {
-                let api_stored = StoredRateLimitWindow {
-                    used_percentage: a.percent,
-                    resets_at: ar,
-                };
-                if supersedes(&api_stored, s) {
+                if !same_window(ar, s.resets_at) || a.percent >= s.used_percentage {
                     Some(a)
                 } else {
                     Some(UsageWindow {
@@ -375,6 +379,46 @@ mod tests {
                 .seven_day
                 .is_none()
         );
+    }
+
+    /// A stored reading whose window boundary differs from the endpoint's describes a
+    /// different limit system's window and must not displace the endpoint reading.
+    #[test]
+    fn test_effective_window_foreign_window_loses_to_api() {
+        let now = Utc::now();
+        let store = StoredRateLimitWindow {
+            used_percentage: 82.0,
+            resets_at: now + Duration::from_secs(4 * 3600 + 1800),
+        };
+        let api = UsageWindow {
+            percent: 17.0,
+            resets_at: Some(now + Duration::from_secs(4 * 3600)),
+        };
+        let result = effective_window(Some(&store), Some(api), now).unwrap();
+        assert_eq!(result.percent, 17.0);
+    }
+
+    #[test]
+    fn test_effective_window_same_window_takes_higher() {
+        let now = Utc::now();
+        let api_reset = now + Duration::from_secs(3600);
+        let store = StoredRateLimitWindow {
+            used_percentage: 60.0,
+            resets_at: api_reset + Duration::from_secs(1),
+        };
+        let api = UsageWindow {
+            percent: 55.0,
+            resets_at: Some(api_reset),
+        };
+        let result = effective_window(Some(&store), Some(api.clone()), now).unwrap();
+        assert_eq!(result.percent, 60.0);
+
+        let stale_store = StoredRateLimitWindow {
+            used_percentage: 40.0,
+            resets_at: api_reset + Duration::from_secs(1),
+        };
+        let result = effective_window(Some(&stale_store), Some(api), now).unwrap();
+        assert_eq!(result.percent, 55.0);
     }
 
     #[test]
