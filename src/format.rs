@@ -529,6 +529,7 @@ mod tests {
             }),
             seven_day: None,
             seven_day_sonnet: None,
+            model_scoped: Vec::new(),
         };
         let result = format_api_usage_5h(Some(&data)).unwrap();
         assert_eq!(result, "5h:37%");
@@ -545,6 +546,7 @@ mod tests {
             }),
             seven_day: None,
             seven_day_sonnet: None,
+            model_scoped: Vec::new(),
         };
         let result = format_api_usage_5h(Some(&data)).unwrap();
         assert_eq!(result, "5h:37%▅");
@@ -567,6 +569,7 @@ mod tests {
             }),
             seven_day: None,
             seven_day_sonnet: None,
+            model_scoped: Vec::new(),
         };
         let enabled = vec![StatusElement::ApiMetrics5h];
 
@@ -591,6 +594,7 @@ mod tests {
             }),
             seven_day: None,
             seven_day_sonnet: None,
+            model_scoped: Vec::new(),
         };
         assert!(format_time_remaining_5h(None, Some(&usage), PlanType::Subscription).is_some());
         assert!(format_time_remaining_5h(None, None, PlanType::Subscription).is_none());

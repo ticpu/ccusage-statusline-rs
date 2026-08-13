@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use crate::cache::get_cache_dir;
 use crate::config::CacheSettings;
 use crate::paths::claude_config_dir;
-use crate::types::{ApiUsageData, PlanType, UsageWindow};
+use crate::types::{ApiUsageData, PlanType, ScopedUsageWindow, UsageWindow};
 
 /// Typed marker for HTTP 429 rate-limit responses; survives anyhow context wrapping.
 #[derive(Debug)]
@@ -34,6 +34,26 @@ struct ApiResponse {
     five_hour: UsageLimit,
     seven_day: UsageLimit,
     seven_day_sonnet: Option<UsageLimit>,
+    /// Per-model weekly windows; the only place the server reports them now.
+    #[serde(default)]
+    limits: Vec<LimitEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LimitEntry {
+    kind: String,
+    percent: Option<f64>,
+    scope: Option<LimitScope>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LimitScope {
+    model: Option<LimitModel>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LimitModel {
+    display_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -390,6 +410,31 @@ fn parse_window(limit: &UsageLimit) -> UsageWindow {
     }
 }
 
+fn parse_model_scoped(api_response: &ApiResponse) -> Vec<ScopedUsageWindow> {
+    let mut scoped: Vec<ScopedUsageWindow> = api_response
+        .limits
+        .iter()
+        .filter(|l| l.kind == "weekly_scoped")
+        .filter_map(|l| {
+            Some(ScopedUsageWindow {
+                display_name: l
+                    .scope
+                    .as_ref()?
+                    .model
+                    .as_ref()?
+                    .display_name
+                    .clone(),
+                percent: l.percent?,
+            })
+        })
+        .collect();
+    scoped.sort_by(|a, b| {
+        a.display_name
+            .cmp(&b.display_name)
+    });
+    scoped
+}
+
 fn parse_api_response(api_response: &ApiResponse) -> ApiUsageData {
     ApiUsageData {
         five_hour: Some(parse_window(&api_response.five_hour)),
@@ -398,6 +443,7 @@ fn parse_api_response(api_response: &ApiResponse) -> ApiUsageData {
             .seven_day_sonnet
             .as_ref()
             .map(|l| l.utilization),
+        model_scoped: parse_model_scoped(api_response),
     }
 }
 
@@ -464,6 +510,7 @@ mod tests {
                     resets_at: Some("2025-11-02T12:00:00Z".to_string()),
                 },
                 seven_day_sonnet: None,
+                limits: Vec::new(),
             }),
         }
     }
@@ -641,6 +688,57 @@ mod tests {
         );
     }
 
+    /// Per-model weekly windows arrive only in limits[], mixed in with the session and
+    /// all-models entries that duplicate five_hour/seven_day.
+    #[test]
+    fn test_parse_model_scoped_from_limits() {
+        let json = r#"{
+            "five_hour": {"utilization": 17, "resets_at": "2026-08-13T23:59:59Z"},
+            "seven_day": {"utilization": 45, "resets_at": "2026-08-17T01:59:59Z"},
+            "seven_day_sonnet": null,
+            "limits": [
+                {"kind": "session", "percent": 17, "scope": null},
+                {"kind": "weekly_all", "percent": 45, "scope": null},
+                {"kind": "weekly_scoped", "percent": 26,
+                 "scope": {"model": {"id": null, "display_name": "Fable"}}},
+                {"kind": "weekly_scoped", "percent": 8,
+                 "scope": {"model": {"id": null, "display_name": "Aria"}}},
+                {"kind": "weekly_scoped", "percent": null,
+                 "scope": {"model": {"id": null, "display_name": "Nameless"}}}
+            ]
+        }"#;
+        let response: ApiResponse = serde_json::from_str(json).unwrap();
+        let data = parse_api_response(&response);
+        let scoped: Vec<(&str, f64)> = data
+            .model_scoped
+            .iter()
+            .map(|w| {
+                (
+                    w.display_name
+                        .as_str(),
+                    w.percent,
+                )
+            })
+            .collect();
+        assert_eq!(scoped, vec![("Aria", 8.0), ("Fable", 26.0)]);
+    }
+
+    /// Caches written before limits[] was parsed must still load.
+    #[test]
+    fn test_parse_response_without_limits() {
+        let json = r#"{
+            "five_hour": {"utilization": 17, "resets_at": "2026-08-13T23:59:59Z"},
+            "seven_day": {"utilization": 45, "resets_at": "2026-08-17T01:59:59Z"},
+            "seven_day_sonnet": null
+        }"#;
+        let response: ApiResponse = serde_json::from_str(json).unwrap();
+        assert!(
+            parse_api_response(&response)
+                .model_scoped
+                .is_empty()
+        );
+    }
+
     #[test]
     fn test_api_usage_result_data() {
         use crate::types::UsageWindow;
@@ -654,6 +752,7 @@ mod tests {
                 resets_at: None,
             }),
             seven_day_sonnet: Some(5.0),
+            model_scoped: Vec::new(),
         };
         let result = ApiUsageResult::Ok(data.clone());
         assert!(

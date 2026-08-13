@@ -323,12 +323,20 @@ pub struct UsageWindow {
     pub resets_at: Option<DateTime<Utc>>,
 }
 
+/// Weekly window scoped to one model bucket, labelled by the server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopedUsageWindow {
+    pub display_name: String,
+    pub percent: f64,
+}
+
 /// API usage data from Anthropic API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiUsageData {
     pub five_hour: Option<UsageWindow>,
     pub seven_day: Option<UsageWindow>,
     pub seven_day_sonnet: Option<f64>,
+    pub model_scoped: Vec<ScopedUsageWindow>,
 }
 
 #[cfg(test)]
