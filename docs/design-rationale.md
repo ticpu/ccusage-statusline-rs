@@ -103,6 +103,15 @@ response cache, not only the stores that merge. Rename-based publishing is reser
 without a lock, and its temp name must be unique per writer, since a temp path derived from the
 destination alone is shared by all concurrent writers who then interleave into it.
 
+## The polled endpoint owns the usage percentages
+
+The percentages in Claude Code's statusline payload come from per-response rate-limit headers, a
+limit system that anchors its windows independently of the usage endpoint the `/usage` dialog
+renders, and reports a different utilization for them. The endpoint reading is the one the user
+checks against, so a stdin reading may replace it only when both name the same window. Ranking the
+two candidates by reset time alone lets a reading of a foreign window outlast every subsequent poll,
+pinning the display until that window expires.
+
 ## Concurrency is the normal case
 
 Every terminal running Claude Code renders this statusline, so several processes hit the same
