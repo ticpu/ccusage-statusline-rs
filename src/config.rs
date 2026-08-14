@@ -21,6 +21,7 @@ pub enum StatusElement {
     ApiMetrics5h,
     ApiMetrics7d,
     ApiMetricsSonnet,
+    ApiMetricsModel7d,
     UpdateStable,
     UpdateLatest,
     Directory,
@@ -34,6 +35,7 @@ const API_DEPENDENT_ELEMENTS: &[StatusElement] = &[
     StatusElement::ApiMetrics5h,
     StatusElement::ApiMetrics7d,
     StatusElement::ApiMetricsSonnet,
+    StatusElement::ApiMetricsModel7d,
 ];
 
 impl StatusElement {
@@ -49,6 +51,7 @@ impl StatusElement {
             Self::ApiMetrics5h => "📊 API metrics (5h)",
             Self::ApiMetrics7d => "📊 API metrics (7d)",
             Self::ApiMetricsSonnet => "📊 API metrics (Sonnet 7d)",
+            Self::ApiMetricsModel7d => "📊 API metrics (per-model 7d)",
             Self::UpdateStable => "🔼 Update (stable)",
             Self::UpdateLatest => "🔼 Update (latest)",
             Self::Directory => "📁 Directory",
@@ -71,6 +74,9 @@ impl StatusElement {
             Self::ApiMetrics5h => "5-hour API utilization percentage from Claude API.",
             Self::ApiMetrics7d => "7-day API utilization percentage from Claude API.",
             Self::ApiMetricsSonnet => "7-day Sonnet-specific utilization from Claude API.",
+            Self::ApiMetricsModel7d => {
+                "7-day per-model utilization from Claude API, one entry per model bucket."
+            }
             Self::UpdateStable => {
                 "Notification when a new stable Claude Code version is available."
             }
@@ -93,6 +99,7 @@ impl StatusElement {
             Self::ApiMetrics5h,
             Self::ApiMetrics7d,
             Self::ApiMetricsSonnet,
+            Self::ApiMetricsModel7d,
             Self::UpdateStable,
             Self::UpdateLatest,
             Self::Directory,
@@ -258,6 +265,7 @@ impl Default for StatuslineConfig {
                 StatusElement::Context,
                 StatusElement::ApiMetrics5h,
                 StatusElement::ApiMetrics7d,
+                StatusElement::ApiMetricsModel7d,
                 StatusElement::UpdateStable,
                 StatusElement::Directory,
             ],

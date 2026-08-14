@@ -339,7 +339,8 @@ fn generate_statusline(
             }
             StatusElement::ApiMetrics5h
             | StatusElement::ApiMetrics7d
-            | StatusElement::ApiMetricsSonnet => {
+            | StatusElement::ApiMetricsSonnet
+            | StatusElement::ApiMetricsModel7d => {
                 if !api_metrics_emitted {
                     api_metrics_emitted = true;
                     if let Some(s) = format_api_metrics_group(
