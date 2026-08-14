@@ -5,6 +5,7 @@ mod cache;
 mod claude_binary;
 mod claude_update;
 mod config;
+mod config_migration;
 mod context;
 mod entry_cache;
 mod format;
@@ -339,7 +340,6 @@ fn generate_statusline(
             }
             StatusElement::ApiMetrics5h
             | StatusElement::ApiMetrics7d
-            | StatusElement::ApiMetricsSonnet
             | StatusElement::ApiMetricsModel7d => {
                 if !api_metrics_emitted {
                     api_metrics_emitted = true;

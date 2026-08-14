@@ -396,13 +396,6 @@ fn format_api_usage_7d(api_usage: Option<&ApiUsageData>) -> Option<String> {
         .map(|w| format!("7d:{}%", w.percent as u32))
 }
 
-/// Format Sonnet 7d API usage
-fn format_api_usage_sonnet(api_usage: Option<&ApiUsageData>) -> Option<String> {
-    api_usage
-        .and_then(|a| a.seven_day_sonnet)
-        .map(|pct| format!("S7d:{}%", pct as u32))
-}
-
 /// Format the per-model 7d API usage, one entry per model bucket the server reports.
 /// Labels use the model's initial; two buckets sharing one take their full names instead.
 fn format_api_usage_model_7d(api_usage: Option<&ApiUsageData>) -> Vec<String> {
@@ -443,15 +436,8 @@ pub fn format_api_metrics_group(
     api_usage: Option<&ApiUsageData>,
 ) -> Option<String> {
     let mut api_parts: Vec<String> = Vec::new();
-    let mut labels: Vec<String> = Vec::new();
 
-    fn push_part(parts: &mut Vec<String>, labels: &mut Vec<String>, text: String) {
-        labels.push(
-            text.split(':')
-                .next()
-                .unwrap_or_default()
-                .to_string(),
-        );
+    fn push_part(parts: &mut Vec<String>, text: String) {
         if parts.is_empty() {
             parts.push(format!("📊{}", text));
         } else {
@@ -462,33 +448,16 @@ pub fn format_api_metrics_group(
     if enabled.contains(&StatusElement::ApiMetrics5h)
         && let Some(text) = format_api_usage_5h(api_usage)
     {
-        push_part(&mut api_parts, &mut labels, text);
+        push_part(&mut api_parts, text);
     }
     if enabled.contains(&StatusElement::ApiMetrics7d)
         && let Some(text) = format_api_usage_7d(api_usage)
     {
-        push_part(&mut api_parts, &mut labels, text);
-    }
-    if enabled.contains(&StatusElement::ApiMetricsSonnet)
-        && let Some(text) = format_api_usage_sonnet(api_usage)
-    {
-        push_part(&mut api_parts, &mut labels, text);
+        push_part(&mut api_parts, text);
     }
     if enabled.contains(&StatusElement::ApiMetricsModel7d) {
         for text in format_api_usage_model_7d(api_usage) {
-            // The dedicated Sonnet element renders the same label from its own field.
-            if labels
-                .iter()
-                .any(|l| {
-                    Some(l.as_str())
-                        == text
-                            .split(':')
-                            .next()
-                })
-            {
-                continue;
-            }
-            push_part(&mut api_parts, &mut labels, text);
+            push_part(&mut api_parts, text);
         }
     }
 
@@ -584,7 +553,6 @@ mod tests {
                 resets_at: None,
             }),
             seven_day: None,
-            seven_day_sonnet: None,
             model_scoped: Vec::new(),
         };
         let result = format_api_usage_5h(Some(&data)).unwrap();
@@ -601,7 +569,6 @@ mod tests {
                 resets_at: None,
             }),
             seven_day: None,
-            seven_day_sonnet: None,
             model_scoped: Vec::new(),
         };
         let result = format_api_usage_5h(Some(&data)).unwrap();
@@ -625,7 +592,6 @@ mod tests {
                 percent: 45.0,
                 resets_at: None,
             }),
-            seven_day_sonnet: None,
             model_scoped: models
                 .iter()
                 .map(|(name, percent)| ScopedUsageWindow {
@@ -657,20 +623,6 @@ mod tests {
         );
     }
 
-    /// The dedicated Sonnet element and a server-supplied Sonnet bucket render the same
-    /// label; the group must not print it twice.
-    #[test]
-    fn test_model_scoped_skips_label_already_emitted() {
-        let mut usage = scoped_usage(&[("Sonnet", 12.0)]);
-        usage.seven_day_sonnet = Some(12.0);
-        let enabled = vec![
-            StatusElement::ApiMetricsSonnet,
-            StatusElement::ApiMetricsModel7d,
-        ];
-        let result = format_api_metrics_group(&enabled, None, Some(&usage)).unwrap();
-        assert_eq!(strip_emojis(&result), "S7d:12%");
-    }
-
     /// A failed fetch must not discard windows stdin already supplied.
     #[test]
     fn test_api_group_prefers_real_data_over_error_label() {
@@ -681,7 +633,6 @@ mod tests {
                 resets_at: None,
             }),
             seven_day: None,
-            seven_day_sonnet: None,
             model_scoped: Vec::new(),
         };
         let enabled = vec![StatusElement::ApiMetrics5h];
@@ -706,7 +657,6 @@ mod tests {
                 resets_at: Some(Utc::now() + Duration::hours(3)),
             }),
             seven_day: None,
-            seven_day_sonnet: None,
             model_scoped: Vec::new(),
         };
         assert!(format_time_remaining_5h(None, Some(&usage), PlanType::Subscription).is_some());

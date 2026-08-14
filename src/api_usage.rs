@@ -112,6 +112,9 @@ impl ApiUsageResult {
 /// The usage document is a handful of numbers.
 const MAX_USAGE_BYTES: u64 = 1024 * 1024;
 
+/// Label for the window the response reports outside limits[]
+const SONNET_BUCKET: &str = "Sonnet";
+
 /// Get API cache file path
 fn get_api_cache_path() -> Result<PathBuf> {
     let cache_dir = get_cache_dir()?;
@@ -428,6 +431,22 @@ fn parse_model_scoped(api_response: &ApiResponse) -> Vec<ScopedUsageWindow> {
             })
         })
         .collect();
+
+    // Sonnet's weekly window has its own field rather than a limits[] entry, on the plans
+    // that get one at all.
+    if let Some(sonnet) = api_response
+        .seven_day_sonnet
+        .as_ref()
+        && !scoped
+            .iter()
+            .any(|w| w.display_name == SONNET_BUCKET)
+    {
+        scoped.push(ScopedUsageWindow {
+            display_name: SONNET_BUCKET.to_string(),
+            percent: sonnet.utilization,
+        });
+    }
+
     scoped.sort_by(|a, b| {
         a.display_name
             .cmp(&b.display_name)
@@ -439,10 +458,6 @@ fn parse_api_response(api_response: &ApiResponse) -> ApiUsageData {
     ApiUsageData {
         five_hour: Some(parse_window(&api_response.five_hour)),
         seven_day: Some(parse_window(&api_response.seven_day)),
-        seven_day_sonnet: api_response
-            .seven_day_sonnet
-            .as_ref()
-            .map(|l| l.utilization),
         model_scoped: parse_model_scoped(api_response),
     }
 }
@@ -723,6 +738,34 @@ mod tests {
         assert_eq!(scoped, vec![("Aria", 8.0), ("Fable", 26.0)]);
     }
 
+    /// The plans that have a Sonnet weekly window get it in its own field, never in limits[].
+    #[test]
+    fn test_sonnet_field_joins_model_scoped() {
+        let json = r#"{
+            "five_hour": {"utilization": 17, "resets_at": "2026-08-13T23:59:59Z"},
+            "seven_day": {"utilization": 45, "resets_at": "2026-08-17T01:59:59Z"},
+            "seven_day_sonnet": {"utilization": 12, "resets_at": "2026-08-17T01:59:59Z"},
+            "limits": [
+                {"kind": "weekly_scoped", "percent": 26,
+                 "scope": {"model": {"id": null, "display_name": "Fable"}}}
+            ]
+        }"#;
+        let response: ApiResponse = serde_json::from_str(json).unwrap();
+        let data = parse_api_response(&response);
+        let scoped: Vec<(&str, f64)> = data
+            .model_scoped
+            .iter()
+            .map(|w| {
+                (
+                    w.display_name
+                        .as_str(),
+                    w.percent,
+                )
+            })
+            .collect();
+        assert_eq!(scoped, vec![("Fable", 26.0), ("Sonnet", 12.0)]);
+    }
+
     /// Caches written before limits[] was parsed must still load.
     #[test]
     fn test_parse_response_without_limits() {
@@ -751,7 +794,6 @@ mod tests {
                 percent: 10.0,
                 resets_at: None,
             }),
-            seven_day_sonnet: Some(5.0),
             model_scoped: Vec::new(),
         };
         let result = ApiUsageResult::Ok(data.clone());

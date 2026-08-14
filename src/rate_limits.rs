@@ -260,25 +260,17 @@ fn merge_store_with_api_usage(
         now,
     );
 
-    let seven_day_sonnet = api_usage
-        .as_ref()
-        .and_then(|a| a.seven_day_sonnet);
     let model_scoped = api_usage
         .map(|a| a.model_scoped)
         .unwrap_or_default();
 
-    if five_hour.is_none()
-        && seven_day.is_none()
-        && seven_day_sonnet.is_none()
-        && model_scoped.is_empty()
-    {
+    if five_hour.is_none() && seven_day.is_none() && model_scoped.is_empty() {
         return None;
     }
 
     Some(ApiUsageData {
         five_hour,
         seven_day,
-        seven_day_sonnet,
         model_scoped,
     })
 }
@@ -358,7 +350,6 @@ mod tests {
         let api = ApiUsageData {
             five_hour: None,
             seven_day: None,
-            seven_day_sonnet: None,
             model_scoped: Vec::new(),
         };
         let result = merge_store_with_api_usage(&RateLimitsStore::default(), Some(api));

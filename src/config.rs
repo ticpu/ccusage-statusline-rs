@@ -1,3 +1,4 @@
+use crate::config_migration::{self, CURRENT_VERSION};
 use crate::paths::claude_config_dir;
 use anyhow::{Context as _, Result};
 use inquire::ui::{RenderConfig, Styled};
@@ -20,7 +21,6 @@ pub enum StatusElement {
     Context,
     ApiMetrics5h,
     ApiMetrics7d,
-    ApiMetricsSonnet,
     ApiMetricsModel7d,
     UpdateStable,
     UpdateLatest,
@@ -34,7 +34,6 @@ const API_DEPENDENT_ELEMENTS: &[StatusElement] = &[
     StatusElement::BurnRateEta,
     StatusElement::ApiMetrics5h,
     StatusElement::ApiMetrics7d,
-    StatusElement::ApiMetricsSonnet,
     StatusElement::ApiMetricsModel7d,
 ];
 
@@ -50,7 +49,6 @@ impl StatusElement {
             Self::Context => "🧠 Context",
             Self::ApiMetrics5h => "📊 API metrics (5h)",
             Self::ApiMetrics7d => "📊 API metrics (7d)",
-            Self::ApiMetricsSonnet => "📊 API metrics (Sonnet 7d)",
             Self::ApiMetricsModel7d => "📊 API metrics (per-model 7d)",
             Self::UpdateStable => "🔼 Update (stable)",
             Self::UpdateLatest => "🔼 Update (latest)",
@@ -73,7 +71,6 @@ impl StatusElement {
             Self::Context => "Current context window token usage and percentage.",
             Self::ApiMetrics5h => "5-hour API utilization percentage from Claude API.",
             Self::ApiMetrics7d => "7-day API utilization percentage from Claude API.",
-            Self::ApiMetricsSonnet => "7-day Sonnet-specific utilization from Claude API.",
             Self::ApiMetricsModel7d => {
                 "7-day per-model utilization from Claude API, one entry per model bucket."
             }
@@ -98,7 +95,6 @@ impl StatusElement {
             Self::Context,
             Self::ApiMetrics5h,
             Self::ApiMetrics7d,
-            Self::ApiMetricsSonnet,
             Self::ApiMetricsModel7d,
             Self::UpdateStable,
             Self::UpdateLatest,
@@ -244,6 +240,8 @@ where
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatuslineConfig {
+    #[serde(default)]
+    pub version: u64,
     #[serde(deserialize_with = "deserialize_elements")]
     pub enabled_elements: Vec<StatusElement>,
     #[serde(default)]
@@ -257,6 +255,7 @@ pub struct StatuslineConfig {
 impl Default for StatuslineConfig {
     fn default() -> Self {
         Self {
+            version: CURRENT_VERSION,
             enabled_elements: vec![
                 StatusElement::Model,
                 StatusElement::BlockCost,
@@ -287,6 +286,16 @@ impl StatuslineConfig {
         Ok(claude_config_dir()?.join("ccusage-statusline-config.json"))
     }
 
+    /// Parse a config document, applying any pending schema migrations first. The flag
+    /// says whether migrating changed it, which is what the caller writes back.
+    fn parse_migrated(content: &str) -> Result<(Self, bool)> {
+        let mut doc: serde_json::Value =
+            serde_json::from_str(content).context("config is not valid JSON")?;
+        let migrated = config_migration::migrate(&mut doc);
+        let config = serde_json::from_value::<Self>(doc).context("config has unusable settings")?;
+        Ok((config, migrated))
+    }
+
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
 
@@ -296,11 +305,19 @@ impl StatuslineConfig {
 
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        match serde_json::from_str::<Self>(&content) {
-            Ok(mut config) => {
+        match Self::parse_migrated(&content) {
+            Ok((mut config, migrated)) => {
                 config
                     .thresholds
                     .clamp_reporting();
+                // A failed write leaves the file at its old schema; the migration is
+                // recomputed on every load, so the only cost is doing it again.
+                if migrated
+                    && let Err(e) = config.save()
+                    && std::io::stderr().is_terminal()
+                {
+                    eprintln!("config: migrated settings could not be saved: {:#}", e);
+                }
                 Ok(config)
             }
             Err(e) => {
@@ -337,8 +354,9 @@ impl StatuslineConfig {
 
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        serde_json::from_str(&content)
-            .with_context(|| format!("{} is invalid JSON; fix or delete it", path.display()))
+        Self::parse_migrated(&content)
+            .map(|(config, _)| config)
+            .with_context(|| format!("{} is unusable; fix or delete it", path.display()))
     }
 
     pub fn save(&self) -> Result<()> {
