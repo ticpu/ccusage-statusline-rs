@@ -5,16 +5,6 @@ Developer quick-start for ccusage-statusline-rs. Rust implementation of Claude C
 ## Quick Start
 
 ```bash
-# Build and test
-cargo fmt && cargo clippy --fix --allow-dirty
-cargo check --message-format=short
-cargo test --release --message-format=short
-cargo build --release
-
-# Install to system and configure Claude
-sudo cp target/release/ccusage-statusline-rs /usr/local/bin/
-ccusage-statusline-rs install
-
 # CLI subcommands: install, uninstall, test, config (see --help)
 ccusage-statusline-rs test       # Quick test with most recent transcript
 
@@ -23,9 +13,6 @@ echo '{"session_id":"test","transcript_path":"path/to/session.jsonl","model":{"i
 
 # Test interactive mode (requires ~/.claude/projects with usage data)
 ./target/release/ccusage-statusline-rs
-
-# Package for Arch Linux
-make package
 ```
 
 ## Code Architecture
@@ -101,13 +88,6 @@ from "phase handed too much work".
 
 ## Development Workflow
 
-**Before every commit**:
-```bash
-cargo fmt                                    # CRITICAL: CI will fail if not formatted
-cargo clippy --fix --allow-dirty --message-format=short
-cargo test --release --message-format=short
-```
-
 **Version management**: single source of truth in `Cargo.toml`; both `PKGBUILD` and `Makefile` auto-extract it (`grep -Po '^version = "\K[^"]+' Cargo.toml`). Release process: `/release` (`.claude/commands/release.md`).
 
 **CI/CD**:
@@ -115,12 +95,6 @@ cargo test --release --message-format=short
 - `release.yml`: Runs on v* tags (creates release, builds x86_64+aarch64 binaries)
 - Uses `rustls-tls` (not native-tls) for easier cross-compilation
 - aarch64: Sets `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc`, `PKG_CONFIG_ALLOW_CROSS=1`
-
-## Testing
-
-```bash
-cargo test --release --message-format=short
-```
 
 ## Gotchas
 
