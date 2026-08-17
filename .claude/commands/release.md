@@ -13,5 +13,11 @@ If $ARGUMENTS names a version or bump level (patch/minor/major), use it; otherwi
 4. Commit as `release: vX.Y.Z`, staging Cargo.toml and Cargo.lock explicitly.
 5. `git push`, then WAIT for CI to pass on master (`gh run watch`).
 6. `git tag -as vX.Y.Z` — changelog goes in the tag message: features, fixes, API changes for someone not following development. No commit lists or hashes.
-7. `git push --tags`, then WAIT for the Release workflow to complete successfully (`gh run watch`).
-8. Update the AUR package: `cd ~/.cache/paru/clone/ccusage-statusline-rs/ && ./update-pkg.sh 2>&1 | grep -v Compiling` — it should print the new version; troubleshoot only if it fails. AUR commits get no Co-Authored-By trailer.
+7. `git push --tags`, then WAIT for the Release workflow to complete successfully (`gh run watch`). It leaves the release a **draft** — step 8 publishes it.
+8. `./sign-release.sh` — detach-signs every asset with the key from `git config user.signingkey`, uploads the `.asc` files, then publishes the draft. `--dry-run` signs and verifies without uploading. Nothing may be published unsigned: both AUR PKGBUILDs carry `validpgpkeys` and fail without the signatures, and with release immutability enabled a published release's assets can no longer be added to.
+9. Update **both** AUR packages — the from-source one and the `-bin` one, which shares this release's binaries:
+   - `cd ~/.cache/paru/clone/ccusage-statusline-rs/ && ./update-pkg.sh 2>&1 | grep -v Compiling`
+   - `cd ~/.cache/paru/clone/ccusage-statusline-rs-bin/ && ./update-pkg.sh`
+
+   Each should print the new version; troubleshoot only if it fails. AUR commits get no Co-Authored-By trailer.
+10. Publish the Debian packages from the `-bin` clone: `./deploy-aptly.sh`. It reads the version from that PKGBUILD, so it runs after step 9.

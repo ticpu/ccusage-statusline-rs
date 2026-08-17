@@ -1,4 +1,5 @@
 /target/
+/scratch/
 Cargo.lock
 /*.tar.gz
 /*.tar.xz

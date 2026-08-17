@@ -131,7 +131,7 @@ jobs:
           files: |
             ccusage-statusline-rs-*.tar.xz
             artifacts/*/*
-          draft: false
+          draft: true
           prerelease: false
           generate_release_notes: true
           append_body: true
