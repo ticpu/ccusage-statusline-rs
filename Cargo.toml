@@ -1,6 +1,6 @@
 [package]
 name = "ccusage-statusline-rs"
-version = "1.13.0"
+version = "1.14.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Claude Code statusline: reconstructs usage from local transcripts, merges it with the claude.ai usage endpoint, renders one line"
