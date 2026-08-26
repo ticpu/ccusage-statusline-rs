@@ -100,12 +100,27 @@ jobs:
         with:
           path: artifacts
 
+      # Published as an asset rather than committed: the checksums of a release can
+      # only be known once its assets are built, which is after the tag exists.
+      # sign-release.sh signs this file like any other, so it carries the same trust.
+      - name: Checksum every asset
+        run: |
+          mv artifacts/*/* .
+          sha256sum ccusage-statusline-rs-*.tar.xz \
+                    ccusage-statusline-rs-linux-* \
+                    ccusage-statusline-rs-macos-* \
+                    ccusage-statusline-rs-windows-* > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             ccusage-statusline-rs-*.tar.xz
-            artifacts/*/*
+            ccusage-statusline-rs-linux-*
+            ccusage-statusline-rs-macos-*
+            ccusage-statusline-rs-windows-*
+            SHA256SUMS
           draft: true
           prerelease: false
           generate_release_notes: true
