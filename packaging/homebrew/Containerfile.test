@@ -1,0 +1,20 @@
+# Validate the Homebrew formula without touching a real tap.
+#
+#   podman build -f packaging/homebrew/Containerfile.test -t brew-check .
+#   podman run --rm -v brew-cache:/home/linuxbrew/.cache/Homebrew \
+#       localhost/brew-check brew audit --strict ticpu/tap/ccusage-statusline-rs
+#   podman run --rm -v brew-cache:/home/linuxbrew/.cache/Homebrew \
+#       localhost/brew-check brew install --build-from-source ticpu/tap/ccusage-statusline-rs
+#
+# `brew audit` only accepts a formula by name from a tap, never a file path, so
+# the formula is copied into a throwaway tap here.
+#
+# The named volume holds Homebrew's download cache, where the ~500 MB rust bottle
+# the Linux source build pulls would otherwise be refetched every run. Caching it
+# in an image layer instead would freeze one bottle version; the volume keeps
+# whatever brew currently wants, and a rust bump just repopulates it.
+FROM docker.io/homebrew/brew:latest
+
+COPY packaging/homebrew/ccusage-statusline-rs.rb /home/linuxbrew/formula.rb
+RUN brew tap-new ticpu/tap --no-git && \
+    cp /home/linuxbrew/formula.rb "$(brew --repository ticpu/tap)/Formula/ccusage-statusline-rs.rb"

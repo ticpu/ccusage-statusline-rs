@@ -1,23 +1,33 @@
+# Checksums are placeholders on master and filled in by scripts/pin-packaging.sh
+# on the release tag's own commit. A hash committed here is stale one release later.
 class CcusageStatuslineRs < Formula
   desc "Claude Code statusline with usage, billing blocks and burn rate"
   homepage "https://github.com/ticpu/ccusage-statusline-rs"
-  # Source build everywhere except Apple Silicon, which has a prebuilt binary.
-  url "https://github.com/ticpu/ccusage-statusline-rs/releases/download/v1.13.0/ccusage-statusline-rs-1.13.0.tar.xz"
-  sha256 "864a5f3e58047b489745716f0e15c993a2cbde45b6b3f825d515da0c1115d368"
+  # Source build on Linux: the released binaries are static musl, and Homebrew
+  # expects to link against its own glibc.
+  url "https://github.com/ticpu/ccusage-statusline-rs/releases/download/v@VERSION@/ccusage-statusline-rs-@VERSION@.tar.xz"
+  sha256 "@TARBALL_SHA256@"
   license "MIT"
-
-  depends_on "rust" => :build
 
   on_macos do
     on_arm do
-      url "https://github.com/ticpu/ccusage-statusline-rs/releases/download/v1.13.0/ccusage-statusline-rs-macos-aarch64"
-      sha256 "985b625ffe04fbff33f4ee8d4824c25a7471a4e057313df0eec469b48d0b973b"
+      url "https://github.com/ticpu/ccusage-statusline-rs/releases/download/v@VERSION@/ccusage-statusline-rs-macos-aarch64"
+      sha256 "@MACOS_AARCH64_SHA256@"
+    end
+
+    on_intel do
+      url "https://github.com/ticpu/ccusage-statusline-rs/releases/download/v@VERSION@/ccusage-statusline-rs-macos-x86_64"
+      sha256 "@MACOS_X86_64_SHA256@"
     end
   end
 
+  on_linux do
+    depends_on "rust" => :build
+  end
+
   def install
-    if OS.mac? && Hardware::CPU.arm?
-      bin.install "ccusage-statusline-rs-macos-aarch64" => "ccusage-statusline-rs"
+    if OS.mac?
+      bin.install Dir["ccusage-statusline-rs-macos-*"].first => "ccusage-statusline-rs"
     else
       system "cargo", "install", *std_cargo_args
     end

@@ -1,17 +1,21 @@
+# A reference derivation: point `version` at a release tag and replace both
+# lib.fakeHash values with what the first build prints. They are derived from the
+# git tree and Cargo.lock rather than from the release binaries, so unlike the
+# Homebrew formula there is nothing for a release to pin them to.
 { lib, rustPlatform, fetchFromGitHub }:
 
 rustPlatform.buildRustPackage rec {
   pname = "ccusage-statusline-rs";
-  version = "1.13.0";
+  version = "1.14.0";
 
   src = fetchFromGitHub {
     owner = "ticpu";
     repo = "ccusage-statusline-rs";
     rev = "v${version}";
-    hash = "sha256-iDI059tE2YPUG/3sE+y7oihvDek0RqcWWty4mcL0vPY=";
+    hash = lib.fakeHash;
   };
 
-  cargoHash = "sha256-Pjc+Ce3oRfzAJzKVaNjltykRIROT4AW8SwDmtIf6VNo=";
+  cargoHash = lib.fakeHash;
 
   # The statusline reads ~/.claude and calls the usage endpoint, and the render
   # budget test asserts wall-clock timing, so neither survives the sandbox.
