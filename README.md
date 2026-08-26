@@ -1,6 +1,6 @@
 # ccusage-statusline-rs
 
-![Status Line Example](docs/images/status-line.png)
+![Status Line Example](docs/images/status-line.svg)
 
 A Claude Code statusline: reconstructs usage from local transcripts, merges it with the
 claude.ai usage endpoint, and renders one line — cost, billing block, burn rate, context,
