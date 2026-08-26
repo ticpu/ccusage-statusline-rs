@@ -1,103 +1,63 @@
 # ccusage-statusline-rs
 
-Ultra-fast Rust implementation of Claude Code usage statusline.
-
 ![Status Line Example](docs/images/status-line.png)
 
-## Description
+A Claude Code statusline: reconstructs usage from local transcripts, merges it with the
+claude.ai usage endpoint, and renders one line — cost, billing block, burn rate, context,
+and rate-limit windows.
 
-High-performance statusline for Claude Code that displays real-time usage metrics, billing blocks, and burn rates. Written in Rust for sub-millisecond response times with intelligent caching.
+## Install
 
-## Features
+| Method | Command |
+|---|---|
+| cargo | `cargo install ccusage-statusline-rs` |
+| binstall | `cargo binstall ccusage-statusline-rs` |
+| Arch (AUR) | `paru -S ccusage-statusline-rs` or `ccusage-statusline-rs-bin` |
+| Homebrew | `brew install ticpu/tap/ccusage-statusline-rs` |
+| Nix | `nix run github:ticpu/ccusage-statusline-rs?dir=packaging/nix` |
+| Binary | download from [releases](https://github.com/ticpu/ccusage-statusline-rs/releases/latest) |
+| Source | `cargo build --release` |
 
-- **Ultra-fast performance** - 15x faster than Node.js implementation (8ms vs 120ms warm)
-- **Live API integration** - Real-time 5-hour and 7-day utilization via Claude Code OAuth
-- **Update notifications** - Checks for Claude Code updates with configurable channels (stable/latest)
-- **Time remaining** - Shows time left in billing block with clock emoji easter egg
-- **Interactive configuration** - Menu-based UI to enable/disable statusline elements
-- **Interactive mode** - Works as standalone tool or piped statusline
-- **OAuth authentication** - Uses Claude Code's native OAuth tokens from ~/.claude/.credentials.json
-- **Accurate cost tracking** - Fetches daily pricing from LiteLLM, supports tiered pricing
-- **Smart caching** - XDG_RUNTIME_DIR-based caching (falls back to `$TEMP` on Windows) with 24-hour pricing cache
-- **5-hour block tracking** - Matches Claude's billing cycles exactly
-- **Deduplication** - Prevents double-counting duplicate JSONL entries
-- **Burn rate monitoring** - Real-time cost per hour with visual indicators
-- **Coding time remaining** - How much time you can continue coding at the current rate
-- **Multi-account support** - `CLAUDE_CONFIG_DIR` env var switches between accounts (e.g. work vs personal)
-- **Auto-install** - Creates ~/.claude/settings.json if missing during install
-
-## Inspiration
-
-This project is a Rust reimplementation of the statusline feature from [ccusage](https://github.com/ryoppippi/ccusage) by ryoppippi. The original TypeScript implementation provided the architecture and pricing logic that this Rust version optimizes for performance.
-
-## Installation
-
-### Prebuilt binaries
-
-Each [release](https://github.com/ticpu/ccusage-statusline-rs/releases) ships x86_64 and
-aarch64 Linux binaries, a Windows x86_64 executable and a macOS aarch64 binary. The Linux
-ones are built on Debian 10 (glibc 2.28) and run on Debian 10+, Ubuntu 18.10+, RHEL 8+ and
-anything newer.
-
-```bash
-wget https://github.com/ticpu/ccusage-statusline-rs/releases/latest/download/ccusage-statusline-rs-linux-x86_64
-sudo install -m0755 ccusage-statusline-rs-linux-x86_64 /usr/local/bin/ccusage-statusline-rs
-ccusage-statusline-rs install
-```
-
-### Linux / macOS
-
-```bash
-cargo build --release
-sudo cp target/release/ccusage-statusline-rs /usr/local/bin/
-ccusage-statusline-rs install
-```
-
-### Windows
-
-```powershell
-cargo build --release
-Copy-Item target\release\ccusage-statusline-rs.exe "$env:USERPROFILE\.local\bin\"
-ccusage-statusline-rs install
-```
-
-> **Note:** on Windows, Claude Code invokes the statusLine command through Git Bash. The
-> `install` command handles this automatically by writing the path with forward slashes.
-> If you configure the path manually, use forward slashes (`C:/Users/...`) rather than
-> backslashes, otherwise Git Bash will silently misinterpret the path and the status line
-> will not appear.
-
-The `install` command will automatically configure `~/.claude/settings.json` for you.
-
-### Manual Build
-
-```bash
-cargo build --release
-```
-
-The binary will be at `target/release/ccusage-statusline-rs` (`.exe` on Windows).
-
-## Usage
-
-### Automatic Configuration
-
-After building, simply run:
+Then wire it into Claude Code:
 
 ```bash
 ccusage-statusline-rs install
 ```
 
-This will automatically add the statusLine configuration to `~/.claude/settings.json`. No manual editing, no bash dependencies required!
+That writes the `statusLine` entry in `~/.claude/settings.json`; `uninstall` removes it.
+Restart Claude Code afterwards.
 
-To remove the configuration:
+The Linux binaries are statically linked against musl, so one binary runs on any glibc or
+musl distribution with no libc dependency.
+
+## Multi-account isolation
+
+`CLAUDE_CONFIG_DIR` switches accounts, and every path follows it — credentials, settings,
+transcripts, this tool's own config, and the runtime cache:
 
 ```bash
-ccusage-statusline-rs uninstall
+export CLAUDE_CONFIG_DIR=~/.claude-personal
+ccusage-statusline-rs install
 ```
 
-### Customizing the Statusline
+Each config directory gets its own cache scope, keyed on the directory name, so a work and
+a personal account never read each other's cached output or usage figures. Unset, it falls
+back to `~/.claude`.
 
-Configure which elements to display:
+> Two config directories whose *basenames* match (`~/a/.claude` and `~/b/.claude`) share one
+> cache scope. Give them distinct names.
+
+## Windows
+
+Claude Code invokes the statusLine command through Git Bash, which cannot execute a Windows
+path written with backslashes or an extended-length prefix. The `install` subcommand
+normalizes the path to forward slashes, and refuses outright — with the reason — when the
+binary sits behind a UNC or verbatim prefix that Git Bash could never run.
+
+Configuring the path by hand means reproducing that: use `C:/Users/you/.local/bin/ccusage-statusline-rs.exe`,
+never backslashes, or the statusline silently fails to appear.
+
+## Configuration
 
 ```bash
 ccusage-statusline-rs config
@@ -105,24 +65,11 @@ ccusage-statusline-rs config
 
 ![Configuration Menu](docs/images/config.png)
 
-This opens an interactive menu where you can:
-- Enable/disable individual elements (Model, Block cost, Time remaining, etc.)
-- Choose update notification channel (stable/latest/off)
-- Configure burn rate and context color thresholds
-- Configuration persists in `~/.claude/ccusage-statusline-config.json`
+An interactive menu toggles individual elements, picks the update-notification channel
+(stable/latest/off), and sets burn-rate and context color thresholds. Settings live in
+`ccusage-statusline-config.json` inside the config directory.
 
-### Multi-Account Usage
-
-If you use multiple Claude accounts, set `CLAUDE_CONFIG_DIR` to point to the alternate config directory:
-
-```bash
-export CLAUDE_CONFIG_DIR=~/.claude-personal
-ccusage-statusline-rs install
-```
-
-The binary resolves all paths (credentials, settings, projects, runtime cache) relative to `CLAUDE_CONFIG_DIR`. Each account gets an isolated cache scope so they don't interfere. When `CLAUDE_CONFIG_DIR` is not set, it falls back to `~/.claude`.
-
-Cache timing can be tuned by editing the config file directly:
+Cache timing is edited in that file directly:
 
 ```json
 {
@@ -134,13 +81,11 @@ Cache timing can be tuned by editing the config file directly:
 }
 ```
 
-- `output_cache_secs` — How long to reuse cached statusline output (default: 300s)
-- `api_fresh_secs` — Minimum interval between API requests (default: 300s)
-- `api_stale_secs` — Show error after this long without a successful API response (default: 1800s)
+- `output_cache_secs` — how long to reuse cached statusline output
+- `api_fresh_secs` — minimum interval between API requests
+- `api_stale_secs` — show an error after this long without a successful API response
 
-### Manual Configuration (Not Recommended)
-
-If you prefer to manually configure, add to your `~/.claude/settings.json`:
+### Manual configuration
 
 ```json
 {
@@ -151,41 +96,36 @@ If you prefer to manually configure, add to your `~/.claude/settings.json`:
 }
 ```
 
-Replace `/path/to/` with the actual path to the binary. On Windows, use forward slashes
-(`C:/Users/yourname/.local/bin/ccusage-statusline-rs.exe`) — backslashes will not work
-because Claude Code invokes the command through Git Bash.
+## Features
+
+- Live 5-hour and 7-day utilization via Claude Code's OAuth token
+- 5-hour billing blocks matching Claude's cycles, deduplicated across duplicate JSONL entries
+- Burn rate, and how long you can keep coding at the current rate
+- Context tokens with threshold coloring
+- Cost from LiteLLM's daily price table, including tiered pricing
+- Claude Code update notifications
 
 ## Performance
 
-- **Rust**: ~8ms average (consistent across all runs)
-- **Node.js warm**: ~120ms average (after JIT warmup)
-- **Speedup**: 15x faster
-- **CI enforced**: Unit tests verify <20ms execution time
+Renders in about 8ms warm, with a 20ms average budget asserted by the test suite.
+Transcripts are parsed incrementally — each render reads only the bytes appended since the
+last one, so cost stays flat as sessions grow.
 
-Transcripts are parsed incrementally: each render reads only the bytes appended
-since the last one, so cost stays flat as sessions grow.
-
-### Profiling
-
-Set `CCUSAGE_TIMING=1` to print per-phase wall time to stderr:
+Set `CCUSAGE_TIMING=1` for per-phase wall time on stderr:
 
 ```bash
 CCUSAGE_TIMING=1 ccusage-statusline-rs test 2>&1 >/dev/null
 ```
 
-```
-timing api: 0.0ms
-timing pricing: 1.7ms
-timing fetches: 1.8ms
-timing block.scan: 1.2ms (36)
-timing block.read: 0.0 MB -> 3427 entries
-timing block: 3.8ms
-timing context: 2.6ms
-```
+`block.read` reports bytes parsed alongside entries produced, which distinguishes a slow
+phase from one handed too much work.
 
-`block.read` reports bytes parsed alongside entries produced, which distinguishes
-a slow phase from one handed too much work.
+## Inspiration
+
+A Rust reimplementation of the statusline from
+[ccusage](https://github.com/ryoppippi/ccusage) by ryoppippi, whose TypeScript version
+provided the architecture and pricing logic.
 
 ## License
 
-MIT - See LICENSE file for details.
+MIT — see LICENSE.
