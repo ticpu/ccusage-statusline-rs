@@ -87,3 +87,7 @@ wait-timeout = "0.2"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }
 
+# musl's mallocng costs ~16% on the transcript parse against glibc's malloc.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+

@@ -35,6 +35,11 @@ use std::fs;
 use std::io::{self, ErrorKind, IsTerminal, Read};
 use types::HookData;
 
+// musl's mallocng is markedly slower than glibc's malloc on the transcript parse.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Parser)]
 #[command(name = "ccusage-statusline-rs")]
 #[command(version)]
