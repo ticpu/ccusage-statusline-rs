@@ -21,7 +21,7 @@ done
 
 TAG="${TAG:-v$(grep -Po '^version = "\K[^"]+' Cargo.toml)}"
 
-KEY=$(git config user.signingkey)
+KEY=$(git config user.signingkey || true)
 if [[ -z "$KEY" ]]; then
     echo "git config user.signingkey is unset: refusing to guess a signing key" >&2
     exit 1
