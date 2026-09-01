@@ -81,9 +81,10 @@ git switch master
    instance) must be re-applied **after** the script runs, followed by
    `makepkg --printsrcinfo > .SRCINFO`. AUR commits get no Co-Authored-By trailer.
 
-9. Publish the Debian packages from the `-bin` clone: `./deploy-aptly.sh`. It reads the
-   version from that PKGBUILD, so it runs after step 8. The script is never committed;
-   it exists only in that working copy.
+9. Publish the Debian packages to the cauca aptly from the `-bin` clone:
+   `./deploy-aptly.sh`. The release itself already carries the `.deb` assets — CI builds
+   them with `make deb-all` — so the script feeds an archive, it no longer produces the
+   packages. It is never committed; it exists only in that working copy.
 
 10. `cargo publish` from the tag if the crate version changed.
 

@@ -15,6 +15,7 @@ and rate-limit windows.
 | Arch (AUR) | `paru -S ccusage-statusline-rs` or `ccusage-statusline-rs-bin` |
 | Homebrew | `brew install ticpu/tap/ccusage-statusline-rs` |
 | Nix | `nix run github:ticpu/ccusage-statusline-rs?dir=packaging/nix` |
+| Debian/Ubuntu | `.deb` for amd64 and arm64 on the [releases](https://github.com/ticpu/ccusage-statusline-rs/releases/latest) page |
 | Binary | download from [releases](https://github.com/ticpu/ccusage-statusline-rs/releases/latest) |
 | Source | `cargo build --release` |
 
@@ -28,7 +29,8 @@ That writes the `statusLine` entry in `~/.claude/settings.json`; `uninstall` rem
 Restart Claude Code afterwards.
 
 The Linux binaries are statically linked against musl, so one binary runs on any glibc or
-musl distribution with no libc dependency.
+musl distribution with no libc dependency. The `.deb` packages wrap those same binaries and
+declare no library dependency, so one package installs on any Debian or Ubuntu release.
 
 ## Multi-account isolation
 

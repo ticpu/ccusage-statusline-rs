@@ -37,4 +37,7 @@ src/
 - TLS is rustls, never native-tls: CI and the release build cross-compile to linux x86_64/aarch64,
   windows-gnu x86_64 and macos aarch64.
 - Version lives only in `Cargo.toml`; `PKGBUILD` and `Makefile` extract it. Release: `/release`.
+- `make deb-all` builds every container target and packages the Linux ones from
+  `packaging/debian/control`. It refuses a binary with an interpreter or a `NEEDED` entry:
+  the packages declare no dependency, which only holds while the binaries stay static musl.
 - `env -u CLAUDE_CONFIG_DIR` must be its own tool call — the sandbox rejects `env` chained with `&&`.
