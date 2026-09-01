@@ -8,3 +8,4 @@ Cargo.lock
 /src/ccusage-statusline-rs-*/
 /*.pkg.tar.zst
 /*.deb
+/dist/

@@ -1,0 +1,6 @@
+# The build copies Cargo.toml, Cargo.lock and src/; everything else is context
+# the daemon uploads for nothing. target/ is a multi-GB subvolume.
+*
+!Cargo.toml
+!Cargo.lock
+!src
