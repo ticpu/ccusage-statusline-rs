@@ -1,0 +1,13 @@
+Package: ccusage-statusline-rs
+Version: @VERSION@
+Architecture: @ARCH@
+Section: utils
+Priority: optional
+Maintainer: Jérôme Poulin <jeromepoulin@gmail.com>
+Homepage: https://github.com/ticpu/ccusage-statusline-rs
+Description: Claude Code statusline with usage, billing blocks and burn rate
+ Reconstructs Claude Code usage from the local transcripts, merges it with the
+ claude.ai usage endpoint, and renders one status line: context window, session
+ cost, five-hour billing block with its reset countdown, burn rate and the
+ weekly rate-limit windows. Statically linked against musl, so it runs on any
+ glibc or musl distribution.
