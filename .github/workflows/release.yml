@@ -23,24 +23,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Build every container target in one pass
-        run: docker build -f Containerfile --output type=local,dest=dist .
-        env:
-          DOCKER_BUILDKIT: 1
-
-      - name: Check binaries are static
-        run: |
-          for binary in dist/ccusage-statusline-rs-linux-*; do
-            if readelf -l "$binary" | grep -q INTERP; then
-              echo "$binary is dynamically linked; the Linux binaries must be static musl" >&2
-              readelf -l "$binary" | grep INTERP >&2
-              exit 1
-            fi
-            echo "$binary: static"
-          done
+      # One command builds every container target and packages the Linux ones, so
+      # CI and a local `make deb-all` run the same recipe. Packaging asserts what
+      # it claims: it refuses a binary carrying an interpreter or a NEEDED entry,
+      # which is the check that keeps the Linux binaries static musl.
+      - name: Build every container target and the .deb packages
+        run: make deb-all DOCKER=docker
 
       - name: Smoke-test binary
         run: ./dist/ccusage-statusline-rs-linux-x86_64 --version
+
+      # One flat artifact directory: the release job moves artifacts/*/* into place
+      # and its globs match names, not paths.
+      - name: Collect the packages beside the binaries
+        run: mv ccusage-statusline-rs_*.deb dist/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -109,7 +105,8 @@ jobs:
           sha256sum ccusage-statusline-rs-*.tar.xz \
                     ccusage-statusline-rs-linux-* \
                     ccusage-statusline-rs-macos-* \
-                    ccusage-statusline-rs-windows-* > SHA256SUMS
+                    ccusage-statusline-rs-windows-* \
+                    ccusage-statusline-rs_*.deb > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create Release
@@ -120,6 +117,7 @@ jobs:
             ccusage-statusline-rs-linux-*
             ccusage-statusline-rs-macos-*
             ccusage-statusline-rs-windows-*
+            ccusage-statusline-rs_*.deb
             SHA256SUMS
           draft: true
           prerelease: false
@@ -127,4 +125,6 @@ jobs:
           append_body: true
           body: |
             The Linux binaries are statically linked against musl, so they carry no
-            libc dependency and run on any glibc or musl distribution.
+            libc dependency and run on any glibc or musl distribution. The .deb
+            packages wrap those same binaries and install on any Debian or Ubuntu
+            release.
