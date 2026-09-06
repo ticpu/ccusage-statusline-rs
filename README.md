@@ -28,6 +28,11 @@ ccusage-statusline-rs install
 That writes the `statusLine` entry in `~/.claude/settings.json`; `uninstall` removes it.
 Restart Claude Code afterwards.
 
+The entry carries `refreshInterval: 5`, so Claude Code re-runs the command every 5 seconds on
+top of its event-driven updates — without it the line freezes for the whole of a sub-agent
+run, which spends tokens without touching the main loop. `--refresh-interval <secs>` picks
+another value.
+
 The Linux binaries are statically linked against musl, so one binary runs on any glibc or
 musl distribution with no libc dependency. The `.deb` packages wrap those same binaries and
 declare no library dependency, so one package installs on any Debian or Ubuntu release.

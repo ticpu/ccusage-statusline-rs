@@ -52,7 +52,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Install statusLine configuration (respects CLAUDE_CONFIG_DIR)
-    Install,
+    Install {
+        /// Seconds between Claude Code's own re-runs of the command
+        #[arg(long, default_value_t = 5)]
+        refresh_interval: u64,
+    },
     /// Remove statusLine configuration (respects CLAUDE_CONFIG_DIR)
     Uninstall,
     /// Test the statusline with most recent transcript
@@ -71,7 +75,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Install) => install::install(),
+        Some(Commands::Install { refresh_interval }) => install::install(refresh_interval),
         Some(Commands::Uninstall) => install::uninstall(),
         Some(Commands::Test) => run_test_mode(),
         Some(Commands::Config) => config::run_config_menu(),

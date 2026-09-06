@@ -24,7 +24,7 @@ fn prompt_yes_no(prompt: &str) -> Result<bool> {
 }
 
 /// Install statusLine configuration
-pub fn install() -> Result<()> {
+pub fn install(refresh_interval: u64) -> Result<()> {
     let config_dir = claude_config_dir()?;
     if !config_dir.exists() {
         anyhow::bail!(
@@ -70,10 +70,12 @@ pub fn install() -> Result<()> {
         );
     }
 
-    // Create statusLine configuration
+    // Without refreshInterval, Claude Code only re-runs the command when the main loop
+    // changes: a sub-agent spends tokens for minutes behind a frozen line.
     let status_line_config = json!({
         "type": "command",
-        "command": binary_path_str
+        "command": binary_path_str,
+        "refreshInterval": refresh_interval
     });
 
     settings["statusLine"] = status_line_config;
@@ -85,6 +87,7 @@ pub fn install() -> Result<()> {
 
     println!("✅ Successfully installed statusLine configuration!");
     println!("   Command: {}", binary_path_str);
+    println!("   Refresh: every {refresh_interval}s");
     println!();
     println!("Restart Claude Code for changes to take effect.");
 
