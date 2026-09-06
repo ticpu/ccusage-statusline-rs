@@ -10,7 +10,7 @@ which bump is wanted before touching anything.
 **Nothing generated reaches master.** `Cargo.lock` lives only on the tag's own commit, a
 detached child of the green master commit, where `--locked` builds need it. Checksums
 live nowhere in this repository: CI publishes them as a signed `SHA256SUMS` asset, and
-`packaging/` carries `@PLACEHOLDER@` templates rendered into the tap at release time.
+`packaging/` carries `@PLACEHOLDER@` templates.
 
 1. Preflight: working tree clean, on master, nothing unpushed
    (`git rev-list --count @{upstream}..HEAD`). If anything is unpushed, push it and wait
@@ -40,7 +40,7 @@ git checkout --detach
 git symbolic-ref -q HEAD          # must FAIL — that is the confirmation the detach took
 cargo generate-lockfile
 git add -f Cargo.lock
-git commit -m "build: pin Cargo.lock for vX.Y.Z"
+git commit --no-verify -m "build: pin Cargo.lock for vX.Y.Z"
 git tag -as vX.Y.Z                # changelog in the tag message, see below
 git push --tags
 git switch master
@@ -62,31 +62,37 @@ git switch master
    both AUR PKGBUILDs carry `validpgpkeys` and fail without the signatures, and with
    release immutability a published release's assets can no longer be added to.
 
-7. Render the Homebrew formula for the tap. CI publishes a `SHA256SUMS` asset built from
-   the assets themselves, so the checksums are read rather than recomputed, and they
-   never enter a commit in this repository:
+7. Update **both** AUR packages, which the script pushes:
 
 ```sh
-./scripts/pin-packaging.sh vX.Y.Z -o /path/to/homebrew-tap/Formula/ccusage-statusline-rs.rb
+./scripts/publish-aur.sh vX.Y.Z
 ```
 
-   Commit that in the tap repository. `packaging/homebrew/` here stays a placeholder
-   template: a checksum on master is stale one release later.
+   It runs each clone's `update-pkg.sh`, refuses to push a PKGBUILD that upgraded to a
+   version other than the tag, and pushes. `update-pkg.sh` regenerates the PKGBUILD, so
+   any hand edit to it (`depends`, for instance) must be re-applied **after** the script
+   runs, followed by `makepkg --printsrcinfo > .SRCINFO` and a push. AUR commits get no
+   Co-Authored-By trailer.
 
-8. Update **both** AUR packages:
-   - `cd ~/.cache/paru/clone/ccusage-statusline-rs/ && ./update-pkg.sh 2>&1 | grep -v Compiling`
-   - `cd ~/.cache/paru/clone/ccusage-statusline-rs-bin/ && ./update-pkg.sh`
+8. Publish the Debian packages to apt.ticpu.net, from `~/GIT/apt-ticpu-net`:
 
-   `update-pkg.sh` regenerates the PKGBUILD, so any hand edit to it (`depends`, for
-   instance) must be re-applied **after** the script runs, followed by
-   `makepkg --printsrcinfo > .SRCINFO`. AUR commits get no Co-Authored-By trailer.
+```sh
+./ingest.sh ccusage-statusline-rs vX.Y.Z
+```
 
-9. Publish the Debian packages to the cauca aptly from the `-bin` clone:
-   `./deploy-aptly.sh`. The release itself already carries the `.deb` assets — CI builds
-   them with `make deb-all` — so the script feeds an archive, it no longer produces the
-   packages. It is never committed; it exists only in that working copy.
+   It downloads the release's `.deb` assets, verifies their signatures, checks the
+   package version against the tag, includes them in every suite `projects.yaml` lists
+   for this project, and publishes. `-n` inspects without touching the archive. The
+   packages are the ones CI built with `make deb-all` and `sign-release.sh` signed —
+   nothing is rebuilt here, so what the archive serves is the release's own bytes.
 
-10. `cargo publish` from the tag if the crate version changed.
+9. `cargo publish --locked` from the tag if the crate version changed, after a
+   `--dry-run`. Return to master afterwards.
+
+**Homebrew is not part of a release and no effort goes into it.** A tap needs the release
+binaries' sha256 pinned into a formula, `ticpu/homebrew-tap` does not exist, and every
+release so far has skipped it. `scripts/pin-packaging.sh` and `packaging/homebrew/` stay
+for whoever revives the idea; nothing in the release runs them.
 
 ## Changelog
 
