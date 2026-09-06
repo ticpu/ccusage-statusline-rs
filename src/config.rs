@@ -485,7 +485,7 @@ pub fn run_config_menu(env: &Env) -> Result<()> {
 
 fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
     let all_elements = StatusElement::all();
-    let emojis_label = "😀 Emojis";
+    let emojis_index = all_elements.len();
     let mut options: Vec<String> = all_elements
         .iter()
         .map(|e| {
@@ -493,7 +493,7 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
                 .to_string()
         })
         .collect();
-    options.push(emojis_label.to_string());
+    options.push("😀 Emojis".to_string());
 
     let mut default_indices: Vec<usize> = all_elements
         .iter()
@@ -506,7 +506,7 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
         .map(|(i, _)| i)
         .collect();
     if config.show_emojis {
-        default_indices.push(options.len() - 1);
+        default_indices.push(emojis_index);
     }
 
     // Echoing every chosen label wraps over several lines on a normal terminal.
@@ -515,20 +515,19 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
         .with_default(&default_indices)
         .with_page_size(16)
         .with_formatter(&|picked| format!("{} of {} enabled", picked.len(), total))
-        .prompt_skippable()?
+        .raw_prompt_skippable()?
     else {
         return Ok(());
     };
 
     config.show_emojis = selected
         .iter()
-        .any(|label| label == emojis_label);
+        .any(|option| option.index == emojis_index);
     config.enabled_elements = selected
         .iter()
-        .filter_map(|label| {
+        .filter_map(|option| {
             all_elements
-                .iter()
-                .find(|e| e.label() == label)
+                .get(option.index)
                 .cloned()
         })
         .collect();
@@ -552,7 +551,7 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
                     t.burn_rate_show
                 )
             },
-            prompt: "Burn rate visibility % (0-100):",
+            prompt: "Burn rate visibility %",
             get: |t| t.burn_rate_show,
             set: |t, v| t.burn_rate_show = v,
         },
@@ -563,7 +562,7 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
                     t.burn_rate_warning
                 )
             },
-            prompt: "Burn rate warning % (0-100):",
+            prompt: "Burn rate warning %",
             get: |t| t.burn_rate_warning,
             set: |t, v| t.burn_rate_warning = v,
         },
@@ -574,7 +573,7 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
                     t.burn_rate_danger
                 )
             },
-            prompt: "Burn rate danger % (0-200):",
+            prompt: "Burn rate danger %",
             get: |t| t.burn_rate_danger,
             set: |t, v| t.burn_rate_danger = v,
         },
@@ -585,7 +584,7 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
                     t.context_warning
                 )
             },
-            prompt: "Context warning % (0-100):",
+            prompt: "Context warning %",
             get: |t| t.context_warning,
             set: |t, v| t.context_warning = v,
         },
@@ -596,7 +595,7 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
                     t.context_danger
                 )
             },
-            prompt: "Context danger % (0-100):",
+            prompt: "Context danger %",
             get: |t| t.context_danger,
             set: |t, v| t.context_danger = v,
         },
@@ -611,38 +610,37 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
             .collect();
         options.push("Back".to_string());
 
-        let Some(choice) = Select::new("Thresholds:", options).prompt_skippable()? else {
+        let Some(choice) = Select::new("Thresholds:", options).raw_prompt_skippable()? else {
             break;
         };
 
-        if choice == "Back" {
+        // "Back" is the one option past the entries.
+        let Some(entry) = entries.get(choice.index) else {
             break;
-        }
+        };
 
-        if let Some(entry) = entries
-            .iter()
-            .find(|e| (e.display)(thresholds) == choice)
-        {
-            let current = (entry.get)(thresholds);
-            if let Some(v) = prompt_threshold(entry.prompt, current)? {
-                (entry.set)(thresholds, v);
-            }
+        let current = (entry.get)(thresholds);
+        if let Some(v) = prompt_threshold(entry.prompt, current)? {
+            (entry.set)(thresholds, v);
         }
     }
 
     Ok(())
 }
 
-fn prompt_threshold(message: &str, current: u32) -> Result<Option<u32>> {
-    CustomType::<u32>::new(message)
+fn prompt_threshold(name: &str, current: u32) -> Result<Option<u32>> {
+    let message = format!("{name} (0-{THRESHOLD_MAX}):");
+    let error = format!("Enter a number between 0 and {THRESHOLD_MAX}");
+
+    CustomType::<u32>::new(&message)
         .with_default(current)
-        .with_error_message("Enter a number between 0 and 200")
+        .with_error_message(&error)
         .with_validator(|val: &u32| {
             if *val <= THRESHOLD_MAX {
                 Ok(inquire::validator::Validation::Valid)
             } else {
                 Ok(inquire::validator::Validation::Invalid(
-                    "Must be between 0 and 200".into(),
+                    format!("Must be between 0 and {THRESHOLD_MAX}").into(),
                 ))
             }
         })
