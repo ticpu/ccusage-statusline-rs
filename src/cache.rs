@@ -146,6 +146,22 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     }
 }
 
+/// Path of a named file in the per-config-dir cache directory.
+pub fn cache_file(name: &str) -> Result<PathBuf> {
+    Ok(get_cache_dir()?.join(name))
+}
+
+/// Read and deserialize a JSON cache file, reporting an unusable one as a miss.
+pub fn read_json_warn<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    match read_json(path) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("cache read error: {:#}", e);
+            None
+        }
+    }
+}
+
 /// Returns the file modification time as Unix epoch seconds.
 pub fn path_mtime_secs(path: impl AsRef<Path>) -> Result<u64> {
     let path = path.as_ref();

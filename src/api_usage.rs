@@ -3,10 +3,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, TryLockError};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use crate::cache::get_cache_dir;
 use crate::config::CacheSettings;
 use crate::paths::claude_config_dir;
 use crate::types::{ApiUsageData, PlanType, ScopedUsageWindow, UsageWindow};
@@ -116,12 +115,6 @@ const MAX_USAGE_BYTES: u64 = 1024 * 1024;
 /// Label for the window the response reports outside limits[]
 const SONNET_BUCKET: &str = "Sonnet";
 
-/// Get API cache file path
-fn get_api_cache_path() -> Result<PathBuf> {
-    let cache_dir = get_cache_dir()?;
-    Ok(cache_dir.join("api-usage-cache.json"))
-}
-
 fn read_credentials() -> Result<ClaudeCredentials> {
     let creds_path = claude_config_dir()?.join(".credentials.json");
 
@@ -168,7 +161,7 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
         return ApiUsageResult::Unavailable;
     }
 
-    let cache_path = match get_api_cache_path() {
+    let cache_path = match crate::cache::cache_file("api-usage-cache.json") {
         Ok(p) => p,
         Err(e) => {
             warn!("Failed to get API cache path: {:#}", e);

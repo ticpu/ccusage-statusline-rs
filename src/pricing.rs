@@ -35,13 +35,7 @@ impl PricingFetcher {
     fn load_pricing(cache_dir: &Path) -> Result<HashMap<String, ModelPricing>> {
         let pricing_cache_path = cache_dir.join("pricing.json");
 
-        let cached: Option<PricingCache> = match crate::cache::read_json(&pricing_cache_path) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("pricing cache read error: {:#}", e);
-                None
-            }
-        };
+        let cached: Option<PricingCache> = crate::cache::read_json_warn(&pricing_cache_path);
 
         // Return a fresh cache by move; otherwise keep it as the stale fallback below.
         let cached = match cached {

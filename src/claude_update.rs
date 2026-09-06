@@ -1,4 +1,3 @@
-use crate::cache::get_cache_dir;
 use crate::claude_binary;
 use crate::config::{StatusElement, StatuslineConfig};
 use crate::warn;
@@ -36,25 +35,14 @@ struct UpdateCache {
 }
 
 fn get_cache_path(channel: VersionChannel) -> Result<PathBuf> {
-    let cache_dir = get_cache_dir()?;
-
-    let filename = match channel {
+    crate::cache::cache_file(match channel {
         VersionChannel::Stable => "update-stable.json",
         VersionChannel::Latest => "update-latest.json",
-    };
-
-    Ok(cache_dir.join(filename))
+    })
 }
 
 fn read_cache(channel: VersionChannel) -> Option<UpdateCache> {
-    let cache_path = get_cache_path(channel).ok()?;
-    match crate::cache::read_json::<UpdateCache>(&cache_path) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("update cache read error: {:#}", e);
-            None
-        }
-    }
+    crate::cache::read_json_warn(&get_cache_path(channel).ok()?)
 }
 
 fn write_cache(channel: VersionChannel, cache: &UpdateCache) -> Result<()> {

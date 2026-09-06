@@ -5,7 +5,6 @@ use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
-use crate::cache::get_cache_dir;
 use crate::types::{ApiUsageData, RateLimits, UsageWindow};
 use crate::warn;
 
@@ -23,8 +22,7 @@ struct RateLimitsStore {
 }
 
 fn get_store_path() -> Result<PathBuf> {
-    let cache_dir = get_cache_dir()?;
-    Ok(cache_dir.join("rate-limits-latest.json"))
+    crate::cache::cache_file("rate-limits-latest.json")
 }
 
 /// Supersede rule: A supersedes B iff A.resets_at > B.resets_at OR (A.resets_at == B.resets_at AND A.used_percentage >= B.used_percentage)

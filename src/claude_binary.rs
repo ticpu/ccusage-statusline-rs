@@ -5,7 +5,6 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
-use crate::cache::get_cache_dir;
 use crate::warn;
 
 const VERSION_CACHE_FILE: &str = "claude-version-cache.json";
@@ -28,37 +27,22 @@ fn get_binary_mtime(path: &PathBuf) -> Option<u64> {
 
 /// Get cached version if still valid (binary hasn't changed)
 fn get_cached_version() -> Option<String> {
-    let cache_dir = get_cache_dir().ok()?;
-    let cache_path = cache_dir.join(VERSION_CACHE_FILE);
+    let cache_path = crate::cache::cache_file(VERSION_CACHE_FILE).ok()?;
+    let cache: VersionCache = crate::cache::read_json_warn(&cache_path)?;
 
-    match crate::cache::read_json::<VersionCache>(&cache_path) {
-        Ok(Some(cache)) => {
-            let binary_path = get_claude_binary_path()?;
-            let current_mtime = get_binary_mtime(&binary_path)?;
-            if cache.binary_mtime == current_mtime {
-                Some(cache.version)
-            } else {
-                None
-            }
-        }
-        Ok(None) => None,
-        Err(e) => {
-            warn!("version cache read error: {:#}", e);
-            None
-        }
-    }
+    let binary_path = get_claude_binary_path()?;
+    (cache.binary_mtime == get_binary_mtime(&binary_path)?).then_some(cache.version)
 }
 
 /// Save version to cache
 fn save_version_cache(version: &str, mtime: u64) {
-    let cache_dir = match get_cache_dir() {
-        Ok(d) => d,
+    let cache_path = match crate::cache::cache_file(VERSION_CACHE_FILE) {
+        Ok(p) => p,
         Err(e) => {
             warn!("version cache: could not get cache dir: {:#}", e);
             return;
         }
     };
-    let cache_path = cache_dir.join(VERSION_CACHE_FILE);
     let cache = VersionCache {
         version: version.to_string(),
         binary_mtime: mtime,
