@@ -60,11 +60,13 @@ fn seek_to_cutoff(reader: &mut BufReader<File>, len: u64, cutoff: &str) -> std::
         }
 
         match line_timestamp(&line) {
-            // Proven old: nothing at or before this line's end is still needed.
-            Some(ts) if ts < cutoff => lo = start + read as u64,
-            Some(_) => hi = mid,
-            // No timestamp to compare; narrow from the top rather than skip data.
-            None => hi = mid,
+            // Proven old, and only a same-shaped UTC stamp proves it: an offset form
+            // sorts below the cutoff at the same instant and would skip needed entries.
+            Some(ts) if ts.len() == cutoff.len() && ts.ends_with('Z') && ts < cutoff => {
+                lo = start + read as u64
+            }
+            // Nothing comparable here; narrow from the top rather than skip data.
+            _ => hi = mid,
         }
     }
 
@@ -270,6 +272,35 @@ mod tests {
             }
             assert_eq!(found, 48 - hour, "cutoff hour {hour} lost entries");
         }
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An offset-form timestamp sorts below a `Z` cutoff at the same instant, so treating
+    /// it as old drops billable entries. The bisect must give up and keep the whole file.
+    #[test]
+    fn test_seek_to_cutoff_keeps_foreign_timestamp_shapes() {
+        let dir = crate::paths::test_scratch_dir("scan-bisect-shape");
+        let path = dir.join("session.jsonl");
+        let pad = "p".repeat(2048);
+        let mut f = fs::File::create(&path).unwrap();
+        for hour in 0..24 {
+            writeln!(
+                f,
+                "{}",
+                line_at(&format!("2026-08-07T{hour:02}:00:00.000+00:00"), &pad)
+            )
+            .unwrap();
+        }
+        drop(f);
+
+        let len = fs::metadata(&path)
+            .unwrap()
+            .len();
+        let mut reader =
+            BufReader::with_capacity(BUFREADER_CAPACITY, fs::File::open(&path).unwrap());
+        let off = seek_to_cutoff(&mut reader, len, "2026-08-07T23:00:00.000Z").unwrap();
+        assert_eq!(off, 0);
 
         fs::remove_dir_all(&dir).unwrap();
     }
