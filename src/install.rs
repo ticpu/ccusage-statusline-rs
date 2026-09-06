@@ -43,7 +43,6 @@ pub fn install(refresh_interval: u64) -> Result<()> {
         json!({})
     };
 
-    // Check if statusLine already exists
     if let Some(existing) = settings.get("statusLine") {
         println!("⚠️  statusLine is already configured:");
         println!("{}", serde_json::to_string_pretty(existing)?);
@@ -80,7 +79,6 @@ pub fn install(refresh_interval: u64) -> Result<()> {
 
     settings["statusLine"] = status_line_config;
 
-    // Write back to file
     let updated_content = serde_json::to_string_pretty(&settings)?;
     crate::cache::write_atomic(&settings_path, updated_content.as_bytes())
         .context("Failed to write settings file")?;
@@ -103,13 +101,11 @@ pub fn uninstall() -> Result<()> {
         return Ok(());
     }
 
-    // Read and parse settings
     let content = fs::read_to_string(&settings_path).context("Failed to read settings file")?;
 
     let mut settings: Value =
         serde_json::from_str(&content).context("Failed to parse settings.json (invalid JSON)")?;
 
-    // Check if statusLine exists
     if settings
         .get("statusLine")
         .is_none()
@@ -118,12 +114,10 @@ pub fn uninstall() -> Result<()> {
         return Ok(());
     }
 
-    // Remove statusLine
     if let Some(obj) = settings.as_object_mut() {
         obj.remove("statusLine");
     }
 
-    // Write back to file
     let updated_content = serde_json::to_string_pretty(&settings)?;
     crate::cache::write_atomic(&settings_path, updated_content.as_bytes())
         .context("Failed to write settings file")?;
