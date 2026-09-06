@@ -213,7 +213,14 @@ pub fn try_get_cached(
     }
 
     let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
+    if let Err(e) = file.read_to_string(&mut contents) {
+        warn!(
+            "Output cache read failed ({}): {:#}",
+            cache_path.display(),
+            e
+        );
+        return Ok(None);
+    }
 
     let semaphore: Semaphore = match serde_json::from_str(&contents) {
         Ok(s) => s,
@@ -227,9 +234,13 @@ pub fn try_get_cached(
         }
     };
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
+    let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs(),
+        Err(e) => {
+            warn!("Output cache: system clock is before UNIX epoch: {:#}", e);
+            return Ok(None);
+        }
+    };
 
     // Saturating: a future timestamp (clock step) is treated as stale
     let is_expired = now.saturating_sub(semaphore.last_update_time) >= ttl_secs;
