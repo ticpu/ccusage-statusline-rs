@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{ErrorKind, IsTerminal, Read, Seek, Write};
+use std::io::{ErrorKind, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use crate::cache::get_cache_dir;
@@ -103,19 +103,15 @@ fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Re
         );
     }
 
-    // Written through the locked descriptor, not published by rename: flock binds to
-    // the inode, so a rename would leave every waiter holding a lock on the unlinked
-    // old file and merging into content the winner had already superseded.
-    if updated {
+    let result = if updated {
         let json = serde_json::to_string(&store)?;
-        file.set_len(0)?;
-        file.rewind()?;
-        file.write_all(json.as_bytes())?;
-        file.sync_data()?;
-    }
+        crate::cache::write_locked_in_place(&mut file, json.as_bytes())
+    } else {
+        Ok(())
+    };
 
     file.unlock()?;
-    Ok(())
+    result
 }
 
 /// Read the freshest stored readings, discarding expired windows

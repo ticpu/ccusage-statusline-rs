@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, IsTerminal, Read, Seek, Write};
+use std::io::{ErrorKind, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -351,29 +351,15 @@ fn core_fetch_or_use_cache(
     }
 }
 
-/// Write through the descriptor the caller already holds the exclusive lock on.
-///
-/// Readers of this file take a shared lock on it, so publishing by rename would leave
-/// them holding a lock on the unlinked inode and reading pre-rename content.
 fn write_envelope_locked(file: &mut File, envelope: &CacheEnvelope) -> Result<()> {
     let json = serde_json::to_string(envelope)?;
-    file.set_len(0)?;
-    file.rewind()?;
-    file.write_all(json.as_bytes())?;
-    file.sync_data()?;
-    Ok(())
+    crate::cache::write_locked_in_place(file, json.as_bytes())
 }
 
 /// Open, lock and write in place. Seeds cache files for tests, which do not hold a lock.
 #[cfg(test)]
 fn write_envelope(envelope: &CacheEnvelope, cache_path: &Path) -> Result<()> {
-    #[allow(clippy::suspicious_open_options)]
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(cache_path)
-        .with_context(|| format!("Failed to open API cache {}", cache_path.display()))?;
+    let mut file = crate::cache::open_private_rw(cache_path)?;
     file.lock()?;
     let result = write_envelope_locked(&mut file, envelope);
     file.unlock()?;

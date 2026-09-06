@@ -2,7 +2,7 @@ use crate::types::UsageTokens;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Read, Seek, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// One billable transcript entry, reduced to what pricing and dedup need.
@@ -121,16 +121,9 @@ pub fn with_cache<T>(path: &Path, f: impl FnOnce(&mut EntryCache) -> (T, bool)) 
 
     if changed {
         let json = serde_json::to_string(&cache)?;
-        let write = (|| -> std::io::Result<()> {
-            file.set_len(0)?;
-            file.rewind()?;
-            file.write_all(json.as_bytes())?;
-            file.sync_data()
-        })();
-        if let Err(e) = write {
+        if let Err(e) = crate::cache::write_locked_in_place(&mut file, json.as_bytes()) {
             file.unlock()?;
-            return Err(e)
-                .with_context(|| format!("Failed to write entry cache {}", path.display()));
+            return Err(e).with_context(|| format!("Entry cache {}", path.display()));
         }
     }
 

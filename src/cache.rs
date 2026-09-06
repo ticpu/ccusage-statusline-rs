@@ -118,6 +118,21 @@ pub fn open_private_rw(path: &Path) -> Result<File> {
         .with_context(|| format!("Failed to open {}", path.display()))
 }
 
+/// Overwrite `file` through the descriptor whose exclusive lock the caller holds.
+///
+/// Readers take a shared lock on these files, so publishing by rename would leave them
+/// holding a lock on the unlinked inode and reading pre-rename content.
+pub fn write_locked_in_place(file: &mut File, bytes: &[u8]) -> Result<()> {
+    file.set_len(0)
+        .context("Failed to truncate locked cache file")?;
+    file.rewind()
+        .context("Failed to rewind locked cache file")?;
+    file.write_all(bytes)
+        .context("Failed to write locked cache file")?;
+    file.sync_data()
+        .context("Failed to flush locked cache file")
+}
+
 /// Read and deserialize a JSON file. Returns `None` on NotFound, `Err` on other failures.
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     match fs::read_to_string(path) {
@@ -236,8 +251,6 @@ pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> R
     let mut file = open_private_rw(cache_path)?;
 
     file.lock()?;
-    file.set_len(0)?;
-    file.rewind()?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -250,10 +263,10 @@ pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> R
     };
 
     let json = serde_json::to_string(&semaphore)?;
-    file.write_all(json.as_bytes())?;
+    let result = write_locked_in_place(&mut file, json.as_bytes());
 
     file.unlock()?;
-    Ok(())
+    result
 }
 
 /// Remove .lock files whose mtime exceeds `ttl_secs`. Runs at most once
