@@ -215,7 +215,5 @@ mod tests {
         })
         .unwrap();
         assert_eq!(consumed, 42);
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -269,7 +269,6 @@ fn merge_store_with_api_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::time::Duration;
 
     #[test]
@@ -338,11 +337,7 @@ mod tests {
 
     #[test]
     fn test_merge_all_none_api_returns_none() {
-        let api = ApiUsageData {
-            five_hour: None,
-            seven_day: None,
-            model_scoped: Vec::new(),
-        };
+        let api = crate::testutil::ApiUsageDataBuilder::new().build();
         let result = merge_store_with_api_usage(&RateLimitsStore::default(), Some(api));
         assert!(result.is_none());
     }
@@ -461,7 +456,5 @@ mod tests {
                 .used_percentage,
             75.0
         );
-
-        fs::remove_dir_all(&temp_dir).unwrap();
     }
 }

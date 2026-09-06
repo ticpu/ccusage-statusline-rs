@@ -99,12 +99,12 @@ pub fn find_claude_paths() -> Result<Vec<PathBuf>> {
 /// name in a world-writable dir cannot be pre-created by another user. The pid
 /// suffix keeps concurrent `cargo test` runs from sharing one directory.
 #[cfg(test)]
-pub fn test_scratch_dir(name: &str) -> PathBuf {
+pub fn test_scratch_dir(name: &str) -> crate::testutil::ScratchDir {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target/test-scratch")
         .join(format!("{}-{}", name, std::process::id()));
     fs::create_dir_all(&dir).unwrap();
-    dir
+    crate::testutil::ScratchDir::new(dir)
 }
 
 pub fn iter_jsonl_files(claude_paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
@@ -302,7 +302,5 @@ mod tests {
         );
         assert_eq!(env.claude_paths, vec![root.join("config/projects")]);
         assert_eq!(env.config_json_path, root.join("config/.claude.json"));
-
-        fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -376,19 +376,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(info.tokens, 42_000);
-        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn test_transcript_compacted_limit() {
         let dir = crate::paths::test_scratch_dir("ctx-compacted");
         let path = dir.join("session.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                r#"{"timestamp":"2024-01-01T00:00:00Z","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":500,"cache_read_input_tokens":95000}}}"#,
-            ],
-        );
+        let line = crate::testutil::usage_line(10, 5, 500, 95000);
+        write_jsonl(&path, &[&line]);
 
         // 200k model with auto-compact on → 167_000 limit
         let info = calculate_context_from_transcript(
@@ -401,20 +396,14 @@ mod tests {
         .unwrap();
         assert_eq!(info.tokens, 95_510);
         assert_eq!(info.percentage, (95_510 * 100) / 167_000);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_transcript_1m_model_limit() {
         let dir = crate::paths::test_scratch_dir("ctx-1m");
         let path = dir.join("session.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                r#"{"timestamp":"2024-01-01T00:00:00Z","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":500,"cache_read_input_tokens":95000}}}"#,
-            ],
-        );
+        let line = crate::testutil::usage_line(10, 5, 500, 95000);
+        write_jsonl(&path, &[&line]);
 
         // 1M model, no policy narrowing → 967_000 limit
         let info = calculate_context_from_transcript(
@@ -427,21 +416,15 @@ mod tests {
         .unwrap();
         assert_eq!(info.tokens, 95_510);
         assert_eq!(info.percentage, 9);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_transcript_multiple_entries_last_wins() {
         let dir = crate::paths::test_scratch_dir("ctx-multi");
         let path = dir.join("session.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                r#"{"timestamp":"2024-01-01T00:00:00Z","message":{"usage":{"input_tokens":1000,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
-                r#"{"timestamp":"2024-01-01T00:01:00Z","message":{"usage":{"input_tokens":2000,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
-            ],
-        );
+        let line1 = crate::testutil::usage_line(1000, 5, 0, 0);
+        let line2 = crate::testutil::usage_line(2000, 5, 0, 0);
+        write_jsonl(&path, &[&line1, &line2]);
 
         let info = calculate_context_from_transcript(
             path.to_str()
@@ -452,8 +435,6 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(info.tokens, 2_000);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -472,8 +453,6 @@ mod tests {
         .unwrap();
         assert_eq!(info.tokens, 0);
         assert_eq!(info.percentage, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -370,8 +370,6 @@ mod tests {
                 ))
                 .collect::<Vec<_>>()
         );
-
-        fs::remove_dir_all(&root).unwrap();
     }
 
     /// The same message written to two transcripts must be counted once.
@@ -391,8 +389,6 @@ mod tests {
 
         let entries = collect_entries(&[projects], now - Duration::hours(5), &root).unwrap();
         assert_eq!(entries.len(), 1);
-
-        fs::remove_dir_all(&root).unwrap();
     }
 
     /// A synthetic message is not an API call, so it must not seed a block or be priced.
@@ -421,7 +417,5 @@ mod tests {
 
         let entries = collect_entries(&[projects], now - Duration::hours(5), &root).unwrap();
         assert_eq!(entries.len(), 1);
-
-        fs::remove_dir_all(&root).unwrap();
     }
 }

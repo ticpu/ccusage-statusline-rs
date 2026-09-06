@@ -272,8 +272,6 @@ mod tests {
             }
             assert_eq!(found, 48 - hour, "cutoff hour {hour} lost entries");
         }
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// An offset-form timestamp sorts below a `Z` cutoff at the same instant, so treating
@@ -301,8 +299,6 @@ mod tests {
             BufReader::with_capacity(BUFREADER_CAPACITY, fs::File::open(&path).unwrap());
         let off = seek_to_cutoff(&mut reader, len, "2026-08-07T23:00:00.000Z").unwrap();
         assert_eq!(off, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -328,7 +324,5 @@ mod tests {
             BufReader::with_capacity(BUFREADER_CAPACITY, fs::File::open(&path).unwrap());
         let off = seek_to_cutoff(&mut reader, len, "2026-09-01T00:00:00.000Z").unwrap();
         assert!(off <= len);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

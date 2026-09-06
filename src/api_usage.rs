@@ -507,7 +507,6 @@ mod tests {
         reader
             .join()
             .unwrap();
-        fs::remove_dir_all(&cache_dir).unwrap();
     }
 
     /// When a writer holds the exclusive lock, fetch_usage_with_lock falls back to shared
@@ -554,8 +553,6 @@ mod tests {
                 .abs()
                 < 0.001
         );
-
-        fs::remove_dir_all(&cache_dir).unwrap();
     }
 
     /// Concurrent callers with fresh cached data all get valid results — no network needed.
@@ -594,8 +591,6 @@ mod tests {
                     < 0.001
             );
         }
-
-        fs::remove_dir_all(&cache_dir).unwrap();
     }
 
     /// A backoff envelope with no response (prior non-429 failure) must not be
@@ -632,8 +627,6 @@ mod tests {
                 .any(|e| e.is::<RateLimited>()),
             "backoff-after-network-failure must not be classified as rate limited"
         );
-
-        fs::remove_dir_all(&cache_dir).unwrap();
     }
 
     /// RateLimited must survive anyhow context wrapping for the chain().any() detection

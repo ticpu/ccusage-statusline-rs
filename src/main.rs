@@ -15,6 +15,8 @@ mod install;
 mod paths;
 mod pricing;
 mod rate_limits;
+#[cfg(test)]
+mod testutil;
 mod timing;
 mod transcript_scan;
 mod types;
@@ -584,7 +586,5 @@ mod tests {
             avg_ms,
             threshold
         );
-
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

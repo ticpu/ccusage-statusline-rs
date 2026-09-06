@@ -325,15 +325,10 @@ mod tests {
 
     #[test]
     fn test_format_api_usage_5h_no_trailing_space() {
-        use crate::types::UsageWindow;
-        let data = ApiUsageData {
-            five_hour: Some(UsageWindow {
-                percent: 37.0,
-                resets_at: None,
-            }),
-            seven_day: None,
-            model_scoped: Vec::new(),
-        };
+        use crate::testutil::ApiUsageDataBuilder;
+        let data = ApiUsageDataBuilder::new()
+            .five_hour(37.0)
+            .build();
         let result = format_api_usage_5h(Some(&data)).unwrap();
         assert_eq!(result, "5h:37%");
         assert!(!result.ends_with(' '));
@@ -341,15 +336,10 @@ mod tests {
 
     #[test]
     fn test_format_api_usage_5h_with_block() {
-        use crate::types::UsageWindow;
-        let data = ApiUsageData {
-            five_hour: Some(UsageWindow {
-                percent: 37.5,
-                resets_at: None,
-            }),
-            seven_day: None,
-            model_scoped: Vec::new(),
-        };
+        use crate::testutil::ApiUsageDataBuilder;
+        let data = ApiUsageDataBuilder::new()
+            .five_hour(37.5)
+            .build();
         let result = format_api_usage_5h(Some(&data)).unwrap();
         assert_eq!(result, "5h:37%▅");
     }
@@ -360,30 +350,9 @@ mod tests {
         assert_eq!(format_currency(0.0), "$0.00");
     }
 
-    fn scoped_usage(models: &[(&str, f64)]) -> ApiUsageData {
-        use crate::types::{ScopedUsageWindow, UsageWindow};
-        ApiUsageData {
-            five_hour: Some(UsageWindow {
-                percent: 17.0,
-                resets_at: None,
-            }),
-            seven_day: Some(UsageWindow {
-                percent: 45.0,
-                resets_at: None,
-            }),
-            model_scoped: models
-                .iter()
-                .map(|(name, percent)| ScopedUsageWindow {
-                    display_name: (*name).to_string(),
-                    percent: *percent,
-                })
-                .collect(),
-        }
-    }
-
     #[test]
     fn test_api_group_renders_model_scoped_after_windows() {
-        let usage = scoped_usage(&[("Fable", 26.0)]);
+        let usage = crate::testutil::scoped_usage(&[("Fable", 26.0)]);
         let enabled = vec![
             StatusElement::ApiMetrics5h,
             StatusElement::ApiMetrics7d,
@@ -395,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_model_scoped_shared_initial_uses_full_name() {
-        let usage = scoped_usage(&[("Fable", 26.0), ("Fathom", 4.0)]);
+        let usage = crate::testutil::scoped_usage(&[("Fable", 26.0), ("Fathom", 4.0)]);
         assert_eq!(
             format_api_usage_model_7d(Some(&usage)),
             vec!["Fable7d:26%", "Fathom7d:4%"]
@@ -405,15 +374,10 @@ mod tests {
     /// A failed fetch must not discard windows stdin already supplied.
     #[test]
     fn test_api_group_prefers_real_data_over_error_label() {
-        use crate::types::UsageWindow;
-        let usage = ApiUsageData {
-            five_hour: Some(UsageWindow {
-                percent: 62.0,
-                resets_at: None,
-            }),
-            seven_day: None,
-            model_scoped: Vec::new(),
-        };
+        use crate::testutil::ApiUsageDataBuilder;
+        let usage = ApiUsageDataBuilder::new()
+            .five_hour(62.0)
+            .build();
         let enabled = vec![StatusElement::ApiMetrics5h];
 
         let with_data =
@@ -429,16 +393,11 @@ mod tests {
     /// The 5h countdown is driven by the API reset time, which needs no local block.
     #[test]
     fn test_time_remaining_5h_without_local_block() {
-        use crate::types::UsageWindow;
+        use crate::testutil::ApiUsageDataBuilder;
         use chrono::Duration;
-        let usage = ApiUsageData {
-            five_hour: Some(UsageWindow {
-                percent: 10.0,
-                resets_at: Some(Utc::now() + Duration::hours(3)),
-            }),
-            seven_day: None,
-            model_scoped: Vec::new(),
-        };
+        let usage = ApiUsageDataBuilder::new()
+            .five_hour_resetting(10.0, Utc::now() + Duration::hours(3))
+            .build();
         assert!(format_time_remaining_5h(None, Some(&usage), PlanType::Subscription).is_some());
         assert!(format_time_remaining_5h(None, None, PlanType::Subscription).is_none());
     }
