@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const BLOCK_DURATION_HOURS: i64 = 5;
+const BLOCK_DURATION_MS: i64 = BLOCK_DURATION_HOURS * 60 * 60 * 1000;
 const FILE_LOOKBACK_HOURS: i64 = 12; // only used when no authoritative reset time is available
 const BUFREADER_CAPACITY: usize = 8192;
 /// Substring every billable entry carries; used to skip lines before parsing them.
@@ -34,7 +35,6 @@ fn floor_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
 
 /// Group pre-parsed, sorted usage entries into 5-hour billing blocks.
 fn group_into_blocks(entries: &[CachedEntry], pricing: &PricingFetcher) -> Vec<Block> {
-    let session_duration_ms = BLOCK_DURATION_HOURS * 60 * 60 * 1000;
     let mut blocks = Vec::new();
     // (floored block start, last entry time)
     let mut current_span: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
@@ -50,13 +50,12 @@ fn group_into_blocks(entries: &[CachedEntry], pricing: &PricingFetcher) -> Vec<B
             let time_since_start = entry_time.timestamp_millis() - start.timestamp_millis();
             let time_since_last = entry_time.timestamp_millis() - last_time.timestamp_millis();
 
-            if time_since_start > session_duration_ms || time_since_last > session_duration_ms {
+            if time_since_start > BLOCK_DURATION_MS || time_since_last > BLOCK_DURATION_MS {
                 blocks.push(create_block_from_entries(
                     start,
                     last_time,
                     &block_entries,
                     now,
-                    session_duration_ms,
                     pricing,
                 ));
                 current_span = Some((floor_to_hour(entry_time), entry_time));
@@ -77,12 +76,25 @@ fn group_into_blocks(entries: &[CachedEntry], pricing: &PricingFetcher) -> Vec<B
             last_time,
             &block_entries,
             now,
-            session_duration_ms,
             pricing,
         ));
     }
 
     blocks
+}
+
+/// Total cost of a set of entries at current prices.
+fn cost_of(entries: &[&CachedEntry], pricing: &PricingFetcher) -> f64 {
+    entries
+        .iter()
+        .map(|e| {
+            pricing.calculate_cost_for(
+                e.model
+                    .as_deref(),
+                &e.usage,
+            )
+        })
+        .sum()
 }
 
 /// Create a block from start time, last-entry time, and entries (matching TypeScript logic).
@@ -91,29 +103,18 @@ fn create_block_from_entries(
     actual_end_time: DateTime<Utc>,
     entries: &[&CachedEntry],
     now: DateTime<Utc>,
-    session_duration_ms: i64,
     pricing: &PricingFetcher,
 ) -> Block {
-    let end_time = start_time + Duration::milliseconds(session_duration_ms);
+    let end_time = start_time + Duration::milliseconds(BLOCK_DURATION_MS);
 
     // TypeScript logic: isActive = now - actualEndTime < sessionDuration && now < endTime
     let time_since_last_activity = now.timestamp_millis() - actual_end_time.timestamp_millis();
-    let is_active = time_since_last_activity < session_duration_ms && now < end_time;
-
-    let mut cost_usd = 0.0;
-    for entry in entries {
-        cost_usd += pricing.calculate_cost_for(
-            entry
-                .model
-                .as_deref(),
-            &entry.usage,
-        );
-    }
+    let is_active = time_since_last_activity < BLOCK_DURATION_MS && now < end_time;
 
     Block {
         start_time,
         end_time,
-        cost_usd,
+        cost_usd: cost_of(entries, pricing),
         is_active,
     }
 }
@@ -405,20 +406,13 @@ pub fn find_active_block(
     if let Some(reset) = five_hour_reset.filter(|r| *r > now) {
         let start = reset - Duration::hours(BLOCK_DURATION_HOURS);
         let entries = collect_entries(claude_paths, start, cache_dir)?;
-        let cost_usd = entries
+        let refs: Vec<&CachedEntry> = entries
             .iter()
-            .map(|e| {
-                pricing.calculate_cost_for(
-                    e.model
-                        .as_deref(),
-                    &e.usage,
-                )
-            })
-            .sum();
+            .collect();
 
         return Ok(Some(ActiveBlock {
             start_time: start,
-            cost_usd,
+            cost_usd: cost_of(&refs, pricing),
             hours_remaining: ((reset - now).num_seconds() as f64 / 3600.0).max(0.0),
         }));
     }

@@ -2,6 +2,11 @@ use crate::types::{ActiveBlock, ApiUsageData, BurnRate, LimitType};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
+/// Spans of the API usage windows the endpoint reports. Not the billing block: a block
+/// is anchored by transcript activity, these by the server's own reset clock.
+const FIVE_HOUR_WINDOW_HOURS: f64 = 5.0;
+const SEVEN_DAY_WINDOW_HOURS: f64 = 168.0;
+
 pub fn calculate_burn_rate(
     block: Option<&ActiveBlock>,
     api_usage: Option<&ApiUsageData>,
@@ -43,12 +48,14 @@ pub fn calculate_burn_rate(
     let five_hour_ratio = api_usage
         .five_hour
         .as_ref()
-        .map_or(0.0, |w| calculate_limit_ratio(w.percent, w.resets_at, 5.0));
+        .map_or(0.0, |w| {
+            calculate_limit_ratio(w.percent, w.resets_at, FIVE_HOUR_WINDOW_HOURS)
+        });
     let seven_day_ratio = api_usage
         .seven_day
         .as_ref()
         .map_or(0.0, |w| {
-            calculate_limit_ratio(w.percent, w.resets_at, 168.0)
+            calculate_limit_ratio(w.percent, w.resets_at, SEVEN_DAY_WINDOW_HOURS)
         });
 
     let (critical_limit, ratio, reset_at) = if five_hour_ratio >= burn_rate_show_ratio {
