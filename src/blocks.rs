@@ -178,97 +178,131 @@ fn seek_to_cutoff(reader: &mut BufReader<File>, len: u64, cutoff: &str) -> std::
     Ok(lo)
 }
 
-/// Parse the appended part of one transcript into cache entries.
-fn parse_from(
-    session_file: &Path,
-    resume_at: u64,
-    file_len: u64,
-    cutoff_rfc3339: &str,
-    line: &mut Vec<u8>,
-) -> (Vec<CachedEntry>, u64, u64) {
-    let file = match File::open(session_file) {
-        Ok(f) => f,
-        Err(e) => {
-            // A transcript can vanish between the scan and the open; one missing
-            // session must not blank the whole statusline.
-            warn_skipped(session_file, &e);
-            return (Vec::new(), resume_at, 0);
-        }
-    };
-    let mut reader = BufReader::with_capacity(BUFREADER_CAPACITY, file);
+/// What one transcript's appended region yielded.
+struct ParsedChunk {
+    entries: Vec<CachedEntry>,
+    /// Byte offset the next resumed parse of this transcript must start from.
+    consumed: u64,
+    read_bytes: u64,
+}
 
-    // Nothing cached yet: skip the bulk of a long transcript instead of reading it
-    // only to discard everything before the window.
-    let mut offset = resume_at;
-    if resume_at == 0 && file_len >= BISECT_MIN_BYTES {
-        match seek_to_cutoff(&mut reader, file_len, cutoff_rfc3339) {
-            Ok(off) => offset = off,
-            Err(e) => warn_skipped(session_file, &e),
+/// Parses transcripts one after another, reusing a single line buffer.
+struct TranscriptParser {
+    /// Bytes, not String: `read_until` skips the UTF-8 validation `read_line` would run
+    /// over every transcript, and most lines are discarded immediately.
+    line: Vec<u8>,
+}
+
+impl TranscriptParser {
+    fn new() -> Self {
+        Self {
+            line: Vec::with_capacity(BUFREADER_CAPACITY),
         }
     }
-    if let Err(e) = reader.seek(SeekFrom::Start(offset)) {
-        warn_skipped(session_file, &e);
-        return (Vec::new(), resume_at, 0);
-    }
 
-    let mut entries = Vec::new();
-    let mut read_bytes = 0u64;
-    let mut consumed = offset;
+    /// Parse the appended part of one transcript into cache entries.
+    fn parse(
+        &mut self,
+        session_file: &Path,
+        resume_at: u64,
+        file_len: u64,
+        cutoff_rfc3339: &str,
+    ) -> ParsedChunk {
+        let unread = ParsedChunk {
+            entries: Vec::new(),
+            consumed: resume_at,
+            read_bytes: 0,
+        };
 
-    loop {
-        line.clear();
-        match reader.read_until(b'\n', line) {
-            Ok(0) => break,
-            Ok(n) => {
-                read_bytes += n as u64;
-                consumed += n as u64;
-            }
+        let file = match File::open(session_file) {
+            Ok(f) => f,
             Err(e) => {
+                // A transcript can vanish between the scan and the open; one missing
+                // session must not blank the whole statusline.
                 warn_skipped(session_file, &e);
-                break;
+                return unread;
+            }
+        };
+        let mut reader = BufReader::with_capacity(BUFREADER_CAPACITY, file);
+
+        // Nothing cached yet: skip the bulk of a long transcript instead of reading it
+        // only to discard everything before the window.
+        let mut offset = resume_at;
+        if resume_at == 0 && file_len >= BISECT_MIN_BYTES {
+            match seek_to_cutoff(&mut reader, file_len, cutoff_rfc3339) {
+                Ok(off) => offset = off,
+                Err(e) => warn_skipped(session_file, &e),
             }
         }
-        // Most transcript lines are prompts and tool results carrying no usage, and
-        // they are the large ones. Rejecting them on a substring keeps serde off the
-        // bulk of the file: parsing every line dominates the whole render otherwise.
-        if memchr::memmem::find(line, USAGE_MARKER).is_none() {
-            continue;
+        if let Err(e) = reader.seek(SeekFrom::Start(offset)) {
+            warn_skipped(session_file, &e);
+            return unread;
         }
-        let Ok(entry) = serde_json::from_slice::<UsageData>(line) else {
-            continue;
-        };
-        if entry
-            .message
-            .is_synthetic()
-        {
-            continue;
-        }
-        let Ok(ts) = DateTime::parse_from_rfc3339(&entry.timestamp) else {
-            continue;
-        };
 
-        let key = match (
-            &entry
+        let mut entries = Vec::new();
+        let mut read_bytes = 0u64;
+        let mut consumed = offset;
+
+        loop {
+            self.line
+                .clear();
+            match reader.read_until(b'\n', &mut self.line) {
+                Ok(0) => break,
+                Ok(n) => {
+                    read_bytes += n as u64;
+                    consumed += n as u64;
+                }
+                Err(e) => {
+                    warn_skipped(session_file, &e);
+                    break;
+                }
+            }
+            // Most transcript lines are prompts and tool results carrying no usage, and
+            // they are the large ones. Rejecting them on a substring keeps serde off the
+            // bulk of the file: parsing every line dominates the whole render otherwise.
+            if memchr::memmem::find(&self.line, USAGE_MARKER).is_none() {
+                continue;
+            }
+            let Ok(entry) = serde_json::from_slice::<UsageData>(&self.line) else {
+                continue;
+            };
+            if entry
                 .message
-                .id,
-            &entry.request_id,
-        ) {
-            (Some(m), Some(r)) => Some(format!("{m}:{r}")),
-            _ => None,
-        };
-        entries.push(CachedEntry {
-            ts: ts.timestamp_millis(),
-            key,
-            model: entry
-                .message
-                .model,
-            usage: entry
-                .message
-                .usage,
-        });
+                .is_synthetic()
+            {
+                continue;
+            }
+            let Ok(ts) = DateTime::parse_from_rfc3339(&entry.timestamp) else {
+                continue;
+            };
+
+            let key = match (
+                &entry
+                    .message
+                    .id,
+                &entry.request_id,
+            ) {
+                (Some(m), Some(r)) => Some(format!("{m}:{r}")),
+                _ => None,
+            };
+            entries.push(CachedEntry {
+                ts: ts.timestamp_millis(),
+                key,
+                model: entry
+                    .message
+                    .model,
+                usage: entry
+                    .message
+                    .usage,
+            });
+        }
+
+        ParsedChunk {
+            entries,
+            consumed,
+            read_bytes,
+        }
     }
-
-    (entries, consumed, read_bytes)
 }
 
 /// Every deduplicated entry at or after `cutoff`, sorted by timestamp.
@@ -295,9 +329,7 @@ fn collect_entries(
         (r, n)
     })?;
 
-    // Bytes, not String: `read_until` skips the UTF-8 validation `read_line` would run
-    // over every transcript, and most lines are discarded immediately.
-    let mut line: Vec<u8> = Vec::with_capacity(BUFREADER_CAPACITY);
+    let mut parser = TranscriptParser::new();
     let mut read_bytes = 0u64;
 
     let cache_file = crate::entry_cache::cache_path(cache_dir);
@@ -313,16 +345,14 @@ fn collect_entries(
             let resume_at = cache.resume_at(session_file, file_len);
 
             if resume_at < file_len {
-                let (entries, consumed, bytes) = parse_from(
-                    session_file,
-                    resume_at,
-                    file_len,
-                    &cutoff_rfc3339,
-                    &mut line,
-                );
-                read_bytes += bytes;
-                if consumed != resume_at || !entries.is_empty() {
-                    cache.record(session_file, consumed, entries);
+                let chunk = parser.parse(session_file, resume_at, file_len, &cutoff_rfc3339);
+                read_bytes += chunk.read_bytes;
+                if chunk.consumed != resume_at
+                    || !chunk
+                        .entries
+                        .is_empty()
+                {
+                    cache.record(session_file, chunk.consumed, chunk.entries);
                     changed = true;
                 }
             }
