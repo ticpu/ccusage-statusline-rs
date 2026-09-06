@@ -26,10 +26,10 @@ use cache::{cleanup_stale_locks, try_get_cached, update_cache};
 use clap::{Parser, Subcommand};
 use config::{ElementGroup, StatusElement};
 use context::calculate_context;
+use format::burn_rate::{BurnRateDisplay, format_burn_rate_component};
 use format::{
-    BurnRateDisplay, format_api_metrics_group, format_block_info, format_burn_rate_component,
-    format_context, format_directory, format_time_remaining_5h, format_time_remaining_7d,
-    strip_emojis,
+    format_api_metrics_group, format_block_info, format_context, format_directory,
+    format_time_remaining_5h, format_time_remaining_7d, strip_emojis,
 };
 use paths::{Env, iter_jsonl_files};
 use pricing::PricingFetcher;

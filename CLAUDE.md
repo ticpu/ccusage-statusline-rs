@@ -25,6 +25,7 @@ src/
 ├── claude_update.rs - Update check (stable/latest channels)
 ├── http.rs - Shared client, size-limited body reads
 ├── format.rs - Rendering: emojis, colors, threshold coloring
+├── format/burn_rate.rs - Burn-rate and ETA rendering
 └── timing.rs - Env-gated phase timing
 ```
 
