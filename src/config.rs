@@ -1,5 +1,5 @@
 use crate::config_migration::{self, CURRENT_VERSION};
-use crate::paths::claude_config_dir;
+use crate::paths::Env;
 use crate::warn;
 use anyhow::{Context as _, Result};
 use inquire::ui::{RenderConfig, Styled};
@@ -310,8 +310,9 @@ impl StatuslineConfig {
             .any(|e| API_DEPENDENT_ELEMENTS.contains(e))
     }
 
-    fn config_path() -> Result<PathBuf> {
-        Ok(claude_config_dir()?.join("ccusage-statusline-config.json"))
+    fn config_path(env: &Env) -> PathBuf {
+        env.config_dir
+            .join("ccusage-statusline-config.json")
     }
 
     /// Parse a config document, applying any pending schema migrations first. The flag
@@ -324,8 +325,8 @@ impl StatuslineConfig {
         Ok((config, migrated))
     }
 
-    pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
+    pub fn load(env: &Env) -> Result<Self> {
+        let path = Self::config_path(env);
 
         if !path.exists() {
             return Ok(Self::default());
@@ -340,7 +341,7 @@ impl StatuslineConfig {
                     .clamp_reporting();
                 // A failed write leaves the file at its old schema; the migration is
                 // recomputed on every load, so the only cost is doing it again.
-                if migrated && let Err(e) = config.save() {
+                if migrated && let Err(e) = config.save(env) {
                     warn!("config: migrated settings could not be saved: {:#}", e);
                 }
                 Ok(config)
@@ -354,8 +355,8 @@ impl StatuslineConfig {
 
     /// `load()` with the fallback to defaults reported rather than silent: an
     /// unreadable config otherwise reverts the whole statusline with no message.
-    pub fn load_or_default() -> Self {
-        match Self::load() {
+    pub fn load_or_default(env: &Env) -> Self {
+        match Self::load(env) {
             Ok(config) => config,
             Err(e) => {
                 warn!("Config load failed, using defaults: {:#}", e);
@@ -366,8 +367,8 @@ impl StatuslineConfig {
 
     /// Like `load()` but propagates parse errors; used in interactive menu where
     /// proceeding with defaults on a corrupt config would silently overwrite it.
-    fn load_strict() -> Result<Self> {
-        let path = Self::config_path()?;
+    fn load_strict(env: &Env) -> Result<Self> {
+        let path = Self::config_path(env);
 
         if !path.exists() {
             return Ok(Self::default());
@@ -380,8 +381,8 @@ impl StatuslineConfig {
             .with_context(|| format!("{} is unusable; fix or delete it", path.display()))
     }
 
-    pub fn save(&self) -> Result<()> {
-        let path = Self::config_path()?;
+    pub fn save(&self, env: &Env) -> Result<()> {
+        let path = Self::config_path(env);
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -434,12 +435,12 @@ fn wait_for_enter() {
     }
 }
 
-pub fn run_config_menu() -> Result<()> {
+pub fn run_config_menu(env: &Env) -> Result<()> {
     inquire::set_global_render_config(
         RenderConfig::default_colored().with_canceled_prompt_indicator(Styled::new("")),
     );
 
-    let mut config = StatuslineConfig::load_strict()?;
+    let mut config = StatuslineConfig::load_strict(env)?;
 
     loop {
         clear_screen();
@@ -464,10 +465,10 @@ pub fn run_config_menu() -> Result<()> {
                 wait_for_enter();
             }
             MainMenu::SaveAndExit => {
-                config.save()?;
+                config.save(env)?;
                 println!(
                     "\nConfiguration saved to {}",
-                    StatuslineConfig::config_path()?.display()
+                    StatuslineConfig::config_path(env).display()
                 );
                 println!(
                     "  Emojis: {}",

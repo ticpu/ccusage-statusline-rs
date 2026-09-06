@@ -1,5 +1,6 @@
 use crate::claude_binary;
 use crate::config::{StatusElement, StatuslineConfig};
+use crate::paths::Env;
 use crate::warn;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -34,20 +35,19 @@ struct UpdateCache {
     checked_at: DateTime<Utc>,
 }
 
-fn get_cache_path(channel: VersionChannel) -> Result<PathBuf> {
-    crate::cache::cache_file(match channel {
+fn get_cache_path(env: &Env, channel: VersionChannel) -> PathBuf {
+    env.cache_file(match channel {
         VersionChannel::Stable => "update-stable.json",
         VersionChannel::Latest => "update-latest.json",
     })
 }
 
-fn read_cache(channel: VersionChannel) -> Option<UpdateCache> {
-    crate::cache::read_json_warn(&get_cache_path(channel).ok()?)
+fn read_cache(env: &Env, channel: VersionChannel) -> Option<UpdateCache> {
+    crate::cache::read_json_warn(&get_cache_path(env, channel))
 }
 
-fn write_cache(channel: VersionChannel, cache: &UpdateCache) -> Result<()> {
-    let cache_path = get_cache_path(channel)?;
-    crate::cache::write_json_atomic(&cache_path, cache)
+fn write_cache(env: &Env, channel: VersionChannel, cache: &UpdateCache) -> Result<()> {
+    crate::cache::write_json_atomic(&get_cache_path(env, channel), cache)
 }
 
 fn is_cache_fresh(cache: &UpdateCache) -> bool {
@@ -143,12 +143,12 @@ const MAX_REGISTRY_BYTES: u64 = 8 * 1024 * 1024;
 /// Check if a Claude Code update is available.
 /// Returns Some(version) if an update is available, None otherwise.
 /// Caches results for 30 minutes per channel.
-pub fn check_update_available(config: &StatuslineConfig) -> Option<String> {
+pub fn check_update_available(env: &Env, config: &StatuslineConfig) -> Option<String> {
     let channel = get_version_channel(config)?;
-    let current = claude_binary::get_version()?;
+    let current = claude_binary::get_version(env)?;
 
     // Try to read cache first
-    if let Some(cache) = read_cache(channel)
+    if let Some(cache) = read_cache(env, channel)
         && is_cache_fresh(&cache)
     {
         if let Some(ref latest) = cache.latest_version
@@ -164,7 +164,7 @@ pub fn check_update_available(config: &StatuslineConfig) -> Option<String> {
         Ok(version) => Some(version),
         Err(e) => {
             warn!("update check failed, using cached version: {:#}", e);
-            read_cache(channel).and_then(|c| c.latest_version)
+            read_cache(env, channel).and_then(|c| c.latest_version)
         }
     };
 
@@ -173,7 +173,7 @@ pub fn check_update_available(config: &StatuslineConfig) -> Option<String> {
         latest_version: latest_version.clone(),
         checked_at: Utc::now(),
     };
-    if let Err(e) = write_cache(channel, &new_cache) {
+    if let Err(e) = write_cache(env, channel, &new_cache) {
         warn!("update cache write failed: {:#}", e);
     }
 

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use crate::config::CacheSettings;
-use crate::paths::claude_config_dir;
+use crate::paths::Env;
 use crate::types::{ApiUsageData, PlanType, ScopedUsageWindow, UsageWindow};
 use crate::warn;
 
@@ -115,8 +115,10 @@ const MAX_USAGE_BYTES: u64 = 1024 * 1024;
 /// Label for the window the response reports outside limits[]
 const SONNET_BUCKET: &str = "Sonnet";
 
-fn read_credentials() -> Result<ClaudeCredentials> {
-    let creds_path = claude_config_dir()?.join(".credentials.json");
+fn read_credentials(env: &Env) -> Result<ClaudeCredentials> {
+    let creds_path = env
+        .config_dir
+        .join(".credentials.json");
 
     let content = fs::read_to_string(&creds_path)
         .context("Failed to read credentials - ensure you're logged in with Claude Code")?;
@@ -124,16 +126,16 @@ fn read_credentials() -> Result<ClaudeCredentials> {
     serde_json::from_str(&content).context("Failed to parse credentials file")
 }
 
-fn read_oauth_credentials() -> Result<String> {
-    let creds = read_credentials()?;
+fn read_oauth_credentials(env: &Env) -> Result<String> {
+    let creds = read_credentials(env)?;
     creds
         .claude_ai_oauth
         .map(|oauth| oauth.access_token)
         .context("No OAuth credentials found - run 'claude' to login")
 }
 
-pub fn get_plan_type() -> PlanType {
-    match read_credentials() {
+pub fn get_plan_type(env: &Env) -> PlanType {
+    match read_credentials(env) {
         Ok(creds) => match creds.claude_ai_oauth {
             Some(oauth)
                 if oauth
@@ -155,21 +157,15 @@ pub fn get_plan_type() -> PlanType {
 }
 
 /// Fetch usage data from Anthropic API with filesystem-based caching and advisory locks
-pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
+pub fn fetch_usage(env: &Env, cache_settings: &CacheSettings) -> ApiUsageResult {
     // Check credentials first - if missing, skip network calls entirely
-    if read_oauth_credentials().is_err() {
+    if read_oauth_credentials(env).is_err() {
         return ApiUsageResult::Unavailable;
     }
 
-    let cache_path = match crate::cache::cache_file("api-usage-cache.json") {
-        Ok(p) => p,
-        Err(e) => {
-            warn!("Failed to get API cache path: {:#}", e);
-            return ApiUsageResult::Failed;
-        }
-    };
+    let cache_path = env.cache_file("api-usage-cache.json");
 
-    match fetch_usage_with_lock(&cache_path, cache_settings) {
+    match fetch_usage_with_lock(env, &cache_path, cache_settings) {
         Ok(data) => ApiUsageResult::Ok(data),
         Err(e) => {
             if e.chain()
@@ -185,6 +181,7 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
 }
 
 fn fetch_usage_with_lock(
+    env: &Env,
     cache_path: &Path,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
@@ -195,7 +192,7 @@ fn fetch_usage_with_lock(
 
     match file.try_lock() {
         Ok(()) => {
-            let result = fetch_or_use_cache(&mut file, cache_settings);
+            let result = fetch_or_use_cache(env, &mut file, cache_settings);
             file.unlock()?;
             result
         }
@@ -213,7 +210,11 @@ fn fetch_usage_with_lock(
     }
 }
 
-fn fetch_or_use_cache(file: &mut File, cache_settings: &CacheSettings) -> Result<ApiUsageData> {
+fn fetch_or_use_cache(
+    env: &Env,
+    file: &mut File,
+    cache_settings: &CacheSettings,
+) -> Result<ApiUsageData> {
     let metadata = file.metadata()?;
     let mtime_age = metadata
         .modified()?
@@ -232,10 +233,11 @@ fn fetch_or_use_cache(file: &mut File, cache_settings: &CacheSettings) -> Result
         None
     };
 
-    core_fetch_or_use_cache(existing, mtime_age, file, cache_settings)
+    core_fetch_or_use_cache(env, existing, mtime_age, file, cache_settings)
 }
 
 fn core_fetch_or_use_cache(
+    env: &Env,
     existing: Option<CacheEnvelope>,
     mtime_age: Duration,
     file: &mut File,
@@ -269,7 +271,7 @@ fn core_fetch_or_use_cache(
         // No envelope yet (cold start just created the file): fall through and fetch.
     }
 
-    match fetch_api_response() {
+    match fetch_api_response(env) {
         Ok(api_response) => {
             let data = parse_api_response(&api_response);
             let envelope = CacheEnvelope {
@@ -417,9 +419,9 @@ fn parse_api_response(api_response: &ApiResponse) -> ApiUsageData {
     }
 }
 
-fn fetch_api_response() -> Result<ApiResponse> {
-    let access_token = read_oauth_credentials()?;
-    let user_agent = crate::claude_binary::get_user_agent();
+fn fetch_api_response(env: &Env) -> Result<ApiResponse> {
+    let access_token = read_oauth_credentials(env)?;
+    let user_agent = crate::claude_binary::get_user_agent(env);
 
     let url = "https://api.anthropic.com/api/oauth/usage";
 
@@ -530,7 +532,8 @@ mod tests {
     #[test]
     fn test_shared_lock_readers_wait_for_valid_data() {
         let cache_dir = crate::paths::test_scratch_dir("api-usage-shared");
-        let cache_path = Arc::new(cache_dir.join("api-usage-cache.json"));
+        let env = Env::under(&cache_dir).unwrap();
+        let cache_path = Arc::new(env.cache_file("api-usage-cache.json"));
         let settings = CacheSettings::default();
 
         let envelope = make_test_envelope(50.0, 25.0, 0);
@@ -553,7 +556,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(10));
 
-        let result = fetch_usage_with_lock(&cache_path, &settings);
+        let result = fetch_usage_with_lock(&env, &cache_path, &settings);
         writer
             .join()
             .unwrap();
@@ -576,7 +579,8 @@ mod tests {
     #[test]
     fn test_concurrent_fetch_all_return_cached_data() {
         let cache_dir = crate::paths::test_scratch_dir("api-usage-concurrent");
-        let cache_path = Arc::new(cache_dir.join("api-usage-cache.json"));
+        let env = Arc::new(Env::under(&cache_dir).unwrap());
+        let cache_path = Arc::new(env.cache_file("api-usage-cache.json"));
         let settings = CacheSettings::default();
 
         let envelope = make_test_envelope(42.0, 20.0, 0);
@@ -584,9 +588,12 @@ mod tests {
 
         let mut handles = vec![];
         for _ in 0..5 {
+            let env = env.clone();
             let path = cache_path.clone();
             let s = settings.clone();
-            handles.push(thread::spawn(move || fetch_usage_with_lock(&path, &s)));
+            handles.push(thread::spawn(move || {
+                fetch_usage_with_lock(&env, &path, &s)
+            }));
         }
 
         for handle in handles {
@@ -613,7 +620,8 @@ mod tests {
     #[test]
     fn test_backoff_no_response_error_is_not_rate_limited() {
         let cache_dir = crate::paths::test_scratch_dir("api-usage-backoff");
-        let cache_path = cache_dir.join("api-usage-cache.json");
+        let env = Env::under(&cache_dir).unwrap();
+        let cache_path = env.cache_file("api-usage-cache.json");
         let settings = CacheSettings::default();
 
         let envelope = make_error_envelope(1);
@@ -627,6 +635,7 @@ mod tests {
 
         // mtime_age near-zero → within the 600s backoff window for 1 prior error
         let result = core_fetch_or_use_cache(
+            &env,
             Some(envelope),
             Duration::from_millis(1),
             &mut file,

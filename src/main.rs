@@ -22,7 +22,7 @@ mod types;
 use anyhow::{Context, Result};
 use blocks::find_active_block;
 use burn_rate::calculate_burn_rate;
-use cache::{cleanup_stale_locks, get_cache_dir, try_get_cached, update_cache};
+use cache::{cleanup_stale_locks, try_get_cached, update_cache};
 use clap::{Parser, Subcommand};
 use config::{ElementGroup, StatusElement};
 use context::calculate_context;
@@ -31,7 +31,7 @@ use format::{
     format_context, format_directory, format_time_remaining_5h, format_time_remaining_7d,
     strip_emojis,
 };
-use paths::{find_claude_paths, iter_jsonl_files};
+use paths::{Env, iter_jsonl_files};
 use pricing::PricingFetcher;
 use std::fs;
 use std::io::{self, ErrorKind, IsTerminal, Read};
@@ -80,7 +80,7 @@ fn main() -> Result<()> {
         Some(Commands::Install { refresh_interval }) => install::install(refresh_interval),
         Some(Commands::Uninstall) => install::uninstall(),
         Some(Commands::Test) => run_test_mode(),
-        Some(Commands::Config) => config::run_config_menu(),
+        Some(Commands::Config) => config::run_config_menu(&Env::resolve()?),
         None => {
             let stdin = io::stdin();
             if stdin.is_terminal() {
@@ -121,12 +121,12 @@ fn run_piped_mode() -> Result<()> {
 
     let hook_data: HookData = serde_json::from_str(&input).context("Failed to parse JSON input")?;
 
-    let cache_dir = get_cache_dir()?;
-    let cache_path = cache_dir.join(cache_file_name(&hook_data.session_id));
+    let env = Env::resolve()?;
+    let cache_path = env.cache_file(&cache_file_name(&hook_data.session_id));
 
-    let statusline_config = config::StatuslineConfig::load_or_default();
+    let statusline_config = config::StatuslineConfig::load_or_default(&env);
     cleanup_stale_locks(
-        &cache_dir,
+        &env.cache_dir,
         statusline_config
             .cache
             .output_cache_secs,
@@ -143,7 +143,7 @@ fn run_piped_mode() -> Result<()> {
         return Ok(());
     }
 
-    let output = generate_statusline(&hook_data, &statusline_config)?;
+    let output = generate_statusline(&env, &hook_data, &statusline_config)?;
     println!("{}", output);
 
     // Cache update failure must not fail the process after output has been printed.
@@ -166,17 +166,18 @@ fn run_piped_mode() -> Result<()> {
 }
 
 fn run_interactive_mode() -> Result<()> {
-    let statusline_config = config::StatuslineConfig::load_or_default();
+    let env = Env::resolve()?;
+    let statusline_config = config::StatuslineConfig::load_or_default(&env);
     let hook_data = HookData::placeholder("", None);
-    let output = generate_statusline(&hook_data, &statusline_config)?;
+    let output = generate_statusline(&env, &hook_data, &statusline_config)?;
     println!("{}", output);
     Ok(())
 }
 
 fn run_test_mode() -> Result<()> {
-    let claude_paths = find_claude_paths()?;
+    let env = Env::resolve()?;
 
-    let most_recent = iter_jsonl_files(&claude_paths)?
+    let most_recent = iter_jsonl_files(&env.claude_paths)?
         .into_iter()
         .filter_map(|path| {
             fs::metadata(&path)
@@ -207,8 +208,8 @@ fn run_test_mode() -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    let statusline_config = config::StatuslineConfig::load_or_default();
-    let output = generate_statusline(&hook_data, &statusline_config)?;
+    let statusline_config = config::StatuslineConfig::load_or_default(&env);
+    let output = generate_statusline(&env, &hook_data, &statusline_config)?;
     println!("{}", output);
 
     Ok(())
@@ -216,11 +217,18 @@ fn run_test_mode() -> Result<()> {
 
 /// Generate statusline output
 fn generate_statusline(
+    env: &Env,
     hook_data: &HookData,
     statusline_config: &config::StatuslineConfig,
 ) -> Result<String> {
-    let cache_dir = get_cache_dir()?;
-    let plan_type = api_usage::get_plan_type();
+    if env
+        .claude_paths
+        .is_empty()
+    {
+        anyhow::bail!("No Claude data directories found");
+    }
+
+    let plan_type = api_usage::get_plan_type(env);
     let thresholds = &statusline_config.thresholds;
 
     // The three fetches are independent and each is bounded by the HTTP client's own
@@ -230,16 +238,18 @@ fn generate_statusline(
         std::thread::scope(|scope| {
             let api = scope.spawn(|| {
                 if statusline_config.needs_api() {
-                    timing::phase("api", || api_usage::fetch_usage(&statusline_config.cache))
+                    timing::phase("api", || {
+                        api_usage::fetch_usage(env, &statusline_config.cache)
+                    })
                 } else {
                     api_usage::ApiUsageResult::Unavailable
                 }
             });
             let pricing =
-                scope.spawn(|| timing::phase("pricing", || PricingFetcher::new(&cache_dir)));
+                scope.spawn(|| timing::phase("pricing", || PricingFetcher::new(&env.cache_dir)));
             let update = scope.spawn(|| {
                 timing::phase("update", || {
-                    claude_update::check_update_available(statusline_config)
+                    claude_update::check_update_available(env, statusline_config)
                 })
             });
 
@@ -259,13 +269,13 @@ fn generate_statusline(
         .cloned();
 
     let api_usage = rate_limits::merge_and_get_effective_usage(
+        env,
         hook_data
             .rate_limits
             .as_ref(),
         polled_api_usage,
     )?;
 
-    let claude_paths = find_claude_paths()?;
     let five_hour_reset = api_usage
         .as_ref()
         .and_then(|a| {
@@ -274,10 +284,10 @@ fn generate_statusline(
         })
         .and_then(|w| w.resets_at);
     let block = timing::phase("block", || {
-        find_active_block(&claude_paths, &pricing, &cache_dir, five_hour_reset)
+        find_active_block(&env.claude_paths, &pricing, &env.cache_dir, five_hour_reset)
     })?;
     let burn_rate = calculate_burn_rate(block.as_ref(), api_usage.as_ref(), thresholds);
-    let context_info = timing::phase("context", || calculate_context(hook_data))?;
+    let context_info = timing::phase("context", || calculate_context(env, hook_data))?;
 
     let inputs = RenderInputs {
         hook_data,

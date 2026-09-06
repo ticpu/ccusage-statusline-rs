@@ -29,6 +29,48 @@ pub fn claude_config_json_path() -> Result<PathBuf> {
     }
 }
 
+/// Every filesystem location a render reads, resolved once so the environment is
+/// consulted at one point instead of from each module that needs a path.
+pub struct Env {
+    pub config_dir: PathBuf,
+    pub config_json_path: PathBuf,
+    pub cache_dir: PathBuf,
+    pub claude_paths: Vec<PathBuf>,
+}
+
+impl Env {
+    pub fn resolve() -> Result<Self> {
+        Ok(Self {
+            config_dir: claude_config_dir()?,
+            config_json_path: claude_config_json_path()?,
+            cache_dir: crate::cache::get_cache_dir()?,
+            claude_paths: find_claude_paths()?,
+        })
+    }
+
+    /// An environment rooted at `root`, for tests that must not read the developer's
+    /// own config, credentials or transcripts.
+    #[cfg(test)]
+    pub fn under(root: &Path) -> Result<Self> {
+        let config_dir = root.join("config");
+        let projects = config_dir.join("projects");
+        fs::create_dir_all(&projects)
+            .with_context(|| format!("Failed to create {}", projects.display()))?;
+        Ok(Self {
+            config_json_path: config_dir.join(".claude.json"),
+            cache_dir: crate::cache::cache_dir_for(&root.join("runtime"), &config_dir)?,
+            claude_paths: vec![projects],
+            config_dir,
+        })
+    }
+
+    pub fn cache_file(&self, name: &str) -> PathBuf {
+        self.cache_dir
+            .join(name)
+    }
+}
+
+/// Project directories to scan; empty when Claude Code has never run under this config.
 pub fn find_claude_paths() -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
 
@@ -48,10 +90,6 @@ pub fn find_claude_paths() -> Result<Vec<PathBuf>> {
         if new_path.exists() {
             paths.push(new_path);
         }
-    }
-
-    if paths.is_empty() {
-        anyhow::bail!("No Claude data directories found");
     }
 
     Ok(paths)
@@ -247,4 +285,24 @@ fn collect_jsonl_files(dir: &Path, min_mtime_secs: Option<i64>, files: &mut Vec<
 
 pub fn warn_skipped(path: &Path, e: &std::io::Error) {
     warn!("transcript scan skipped {}: {}", path.display(), e);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_env_under_scopes_cache_dir_by_config_name() {
+        let root = test_scratch_dir("env-under");
+        let env = Env::under(&root).unwrap();
+
+        assert_eq!(
+            env.cache_dir,
+            root.join("runtime/ccusage-statusline-rs/config")
+        );
+        assert_eq!(env.claude_paths, vec![root.join("config/projects")]);
+        assert_eq!(env.config_json_path, root.join("config/.claude.json"));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
 }

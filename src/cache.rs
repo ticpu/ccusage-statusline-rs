@@ -18,16 +18,20 @@ struct Semaphore {
     transcript_mtime: u64,
 }
 
-/// Get cache directory from XDG_RUNTIME_DIR, scoped per config dir.
-/// Computed once per process; env lookups and create_dir_all happen only once.
-pub fn get_cache_dir() -> Result<PathBuf> {
-    static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+/// Create and return the cache directory `config_dir` owns under `runtime_dir`.
+///
+/// Two config dirs must never share a cache: their credentials, plans and transcripts
+/// differ, so a shared usage cache reports one account's numbers under the other.
+pub fn cache_dir_for(runtime_dir: &Path, config_dir: &Path) -> Result<PathBuf> {
+    let config_name = config_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".claude")
+        .trim_start_matches('.');
+    let dir = runtime_dir
+        .join("ccusage-statusline-rs")
+        .join(config_name);
 
-    if let Some(dir) = CACHE_DIR.get() {
-        return Ok(dir.clone());
-    }
-
-    let dir = compute_cache_dir()?;
     fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create cache dir {}", dir.display()))?;
 
@@ -40,14 +44,11 @@ pub fn get_cache_dir() -> Result<PathBuf> {
             .with_context(|| format!("Failed to restrict cache dir {}", dir.display()))?;
     }
 
-    // Losing the race is expected: every caller computes the same path.
-    Ok(CACHE_DIR
-        .get_or_init(|| dir)
-        .clone())
+    Ok(dir)
 }
 
-fn compute_cache_dir() -> Result<PathBuf> {
-    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             #[cfg(unix)]
@@ -64,16 +65,24 @@ fn compute_cache_dir() -> Result<PathBuf> {
             {
                 std::env::temp_dir()
             }
-        });
-    let config_dir = crate::paths::claude_config_dir()?;
-    let config_name = config_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(".claude")
-        .trim_start_matches('.');
-    Ok(runtime_dir
-        .join("ccusage-statusline-rs")
-        .join(config_name))
+        })
+}
+
+/// Get cache directory from XDG_RUNTIME_DIR, scoped per config dir.
+/// Computed once per process; env lookups and create_dir_all happen only once.
+pub fn get_cache_dir() -> Result<PathBuf> {
+    static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+    if let Some(dir) = CACHE_DIR.get() {
+        return Ok(dir.clone());
+    }
+
+    let dir = cache_dir_for(&runtime_dir(), &crate::paths::claude_config_dir()?)?;
+
+    // Losing the race is expected: every caller computes the same path.
+    Ok(CACHE_DIR
+        .get_or_init(|| dir)
+        .clone())
 }
 
 /// Atomic write: serialize `value` to a temp file then rename into place.
@@ -144,11 +153,6 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("Failed to read {}", path.display())),
     }
-}
-
-/// Path of a named file in the per-config-dir cache directory.
-pub fn cache_file(name: &str) -> Result<PathBuf> {
-    Ok(get_cache_dir()?.join(name))
 }
 
 /// Read and deserialize a JSON cache file, reporting an unusable one as a miss.

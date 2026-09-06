@@ -3,8 +3,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{ErrorKind, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::paths::Env;
 use crate::types::{ApiUsageData, RateLimits, UsageWindow};
 use crate::warn;
 
@@ -19,10 +20,6 @@ pub struct StoredRateLimitWindow {
 struct RateLimitsStore {
     five_hour: Option<StoredRateLimitWindow>,
     seven_day: Option<StoredRateLimitWindow>,
-}
-
-fn get_store_path() -> Result<PathBuf> {
-    crate::cache::cache_file("rate-limits-latest.json")
 }
 
 /// Supersede rule: A supersedes B iff A.resets_at > B.resets_at OR (A.resets_at == B.resets_at AND A.used_percentage >= B.used_percentage)
@@ -165,10 +162,11 @@ fn read_store_at(store_path: &Path) -> Result<RateLimitsStore> {
 
 /// Merge stdin rate_limits into the cross-session store, then merge with API usage data
 pub fn merge_and_get_effective_usage(
+    env: &Env,
     stdin_limits: Option<&RateLimits>,
     api_usage: Option<ApiUsageData>,
 ) -> Result<Option<ApiUsageData>> {
-    let store_path = get_store_path()?;
+    let store_path = env.cache_file("rate-limits-latest.json");
     if let Some(limits) = stdin_limits {
         merge_and_update_store_at(limits, &store_path)?;
     }

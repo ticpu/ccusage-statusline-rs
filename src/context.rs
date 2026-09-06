@@ -1,6 +1,6 @@
 use crate::warn;
 use crate::{
-    paths::claude_config_json_path,
+    paths::Env,
     types::{ContextInfo, ContextWindowData, HookData, UsageData},
 };
 use anyhow::Result;
@@ -35,12 +35,12 @@ fn default_auto_compact() -> bool {
     true
 }
 
-pub fn calculate_context(hook_data: &HookData) -> Result<Option<ContextInfo>> {
+pub fn calculate_context(env: &Env, hook_data: &HookData) -> Result<Option<ContextInfo>> {
     let model_id = hook_data
         .model
         .id
         .as_deref();
-    let auto_compact = auto_compact_enabled();
+    let auto_compact = auto_compact_enabled(env);
 
     if let Some(cw) = &hook_data.context_window
         && let Some(info) = context_from_window(cw, model_id, auto_compact)
@@ -139,16 +139,10 @@ fn effective_context_limit(
     .max(1)
 }
 
-fn auto_compact_enabled() -> bool {
-    let config_path = match claude_config_json_path() {
-        Ok(p) => p,
-        Err(e) => {
-            warn!("Context limit: could not determine config path: {e:#}");
-            return default_auto_compact();
-        }
-    };
+fn auto_compact_enabled(env: &Env) -> bool {
+    let config_path = &env.config_json_path;
 
-    let config = match fs::read_to_string(&config_path) {
+    let config = match fs::read_to_string(config_path) {
         Ok(content) => match serde_json::from_str::<ClaudeConfig>(&content) {
             Ok(cfg) => Some(cfg),
             Err(e) => {
@@ -376,10 +370,13 @@ mod tests {
             }),
             rate_limits: None,
         };
-        let info = calculate_context(&hook)
+        let root = crate::paths::test_scratch_dir("ctx-window-data");
+        let env = Env::under(&root).unwrap();
+        let info = calculate_context(&env, &hook)
             .unwrap()
             .unwrap();
         assert_eq!(info.tokens, 42_000);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
