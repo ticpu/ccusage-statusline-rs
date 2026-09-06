@@ -220,3 +220,17 @@ pub struct ApiUsageData {
     pub seven_day: Option<UsageWindow>,
     pub model_scoped: Vec<ScopedUsageWindow>,
 }
+
+impl ApiUsageData {
+    pub fn five_hour_reset(&self) -> Option<DateTime<Utc>> {
+        self.five_hour
+            .as_ref()
+            .and_then(|w| w.resets_at)
+    }
+
+    pub fn seven_day_reset(&self) -> Option<DateTime<Utc>> {
+        self.seven_day
+            .as_ref()
+            .and_then(|w| w.resets_at)
+    }
+}

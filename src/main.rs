@@ -278,11 +278,7 @@ fn generate_statusline(
 
     let five_hour_reset = api_usage
         .as_ref()
-        .and_then(|a| {
-            a.five_hour
-                .as_ref()
-        })
-        .and_then(|w| w.resets_at);
+        .and_then(types::ApiUsageData::five_hour_reset);
     let block = timing::phase("block", || {
         find_active_block(&env.claude_paths, &pricing, &env.cache_dir, five_hour_reset)
     })?;

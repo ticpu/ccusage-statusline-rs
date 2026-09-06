@@ -35,13 +35,7 @@ pub fn format_time_remaining_5h(
     let now = Utc::now();
     // The API reset time is authoritative and needs no local block; requiring one hid
     // this element whenever the transcript scan found nothing.
-    let remaining_hours = match api_usage
-        .and_then(|a| {
-            a.five_hour
-                .as_ref()
-        })
-        .and_then(|w| w.resets_at)
-    {
+    let remaining_hours = match api_usage.and_then(ApiUsageData::five_hour_reset) {
         Some(reset_time) => (reset_time - now).num_seconds() as f64 / 3600.0,
         None => block?.hours_remaining,
     };
@@ -59,12 +53,7 @@ pub fn format_time_remaining_7d(
     }
 
     let now = Utc::now();
-    let reset_time = api_usage
-        .and_then(|a| {
-            a.seven_day
-                .as_ref()
-        })
-        .and_then(|w| w.resets_at)?;
+    let reset_time = api_usage.and_then(ApiUsageData::seven_day_reset)?;
     let remaining_hours = (reset_time - now).num_seconds() as f64 / 3600.0;
     Some(format_days_remaining(remaining_hours))
 }
@@ -153,18 +142,55 @@ fn scaled_eta(reset_in: Duration, ratio: f64) -> Duration {
     Duration::try_seconds((reset_in.num_seconds() as f64 / ratio) as i64).unwrap_or(reset_in)
 }
 
+/// Band a value falls in relative to the warning and danger thresholds. It decides
+/// colour only; what each band renders is the caller's, and they do differ.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Tier {
+    Danger,
+    Warning,
+    Safe,
+}
+
+impl Tier {
+    fn of(value: f64, warning: f64, danger: f64) -> Self {
+        if value >= danger {
+            Self::Danger
+        } else if value >= warning {
+            Self::Warning
+        } else {
+            Self::Safe
+        }
+    }
+
+    fn paint(self, s: &str) -> String {
+        match self {
+            Self::Danger => s
+                .red()
+                .to_string(),
+            Self::Warning => s
+                .yellow()
+                .to_string(),
+            Self::Safe => s
+                .green()
+                .to_string(),
+        }
+    }
+}
+
 /// Color a string red/yellow/green based on value vs warning and danger thresholds
 fn colorize_by_threshold(s: &str, value: f64, warning: f64, danger: f64) -> String {
-    if value >= danger {
-        s.red()
-            .to_string()
-    } else if value >= warning {
-        s.yellow()
-            .to_string()
-    } else {
-        s.green()
-            .to_string()
+    Tier::of(value, warning, danger).paint(s)
+}
+
+/// The bracketed ETA a rate display carries, empty when it is not shown or no reset
+/// time is known.
+fn eta_bracket(reset_in: Option<Duration>, ratio: f64, show: bool) -> String {
+    if !show {
+        return String::new();
     }
+    reset_in
+        .map(|reset_in| format!("[⏱{}]", format_eta(scaled_eta(reset_in, ratio))))
+        .unwrap_or_default()
 }
 
 /// Controls what the burn rate component renders; the (false, false) dead combo is unrepresentable
@@ -249,14 +275,11 @@ fn format_rate_display(
         thresholds.burn_rate_danger_ratio(),
     );
 
-    let primary_eta = if show_eta && burn_rate.ratio >= thresholds.burn_rate_danger_ratio() {
-        burn_rate
-            .reset_in
-            .map(|reset_in| format!("[⏱{}]", format_eta(scaled_eta(reset_in, burn_rate.ratio))))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    let primary_eta = eta_bracket(
+        burn_rate.reset_in,
+        burn_rate.ratio,
+        show_eta && burn_rate.ratio >= thresholds.burn_rate_danger_ratio(),
+    );
 
     let limit_str = burn_rate
         .critical_limit
@@ -266,19 +289,11 @@ fn format_rate_display(
         && burn_rate.critical_limit != LimitType::SevenDay
     {
         let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
-        let seven_day_eta = if show_eta {
-            burn_rate
-                .seven_day_reset_in
-                .map(|reset_in| {
-                    format!(
-                        "[⏱{}]",
-                        format_eta(scaled_eta(reset_in, burn_rate.seven_day_ratio))
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let seven_day_eta = eta_bracket(
+            burn_rate.seven_day_reset_in,
+            burn_rate.seven_day_ratio,
+            show_eta,
+        );
         format!(" {}{} 7d", format!("{}%", pct).red(), seven_day_eta)
     } else {
         String::new()
@@ -296,24 +311,21 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
         return Some("⏱\u{200B}limit".to_string());
     }
 
-    let primary = if burn_rate.ratio >= thresholds.burn_rate_danger_ratio() {
-        burn_rate
+    // Only the danger band scales the ETA by the burn ratio; the warning band shows the
+    // plain time to reset, which is what test_eta_only_warning_zone guards.
+    let tier = Tier::of(
+        burn_rate.ratio,
+        thresholds.burn_rate_warning_ratio(),
+        thresholds.burn_rate_danger_ratio(),
+    );
+    let primary = match tier {
+        Tier::Danger => burn_rate
             .reset_in
-            .map(|reset_in| {
-                format_eta(scaled_eta(reset_in, burn_rate.ratio))
-                    .red()
-                    .to_string()
-            })
-    } else if burn_rate.ratio >= thresholds.burn_rate_warning_ratio() {
-        burn_rate
+            .map(|reset_in| tier.paint(&format_eta(scaled_eta(reset_in, burn_rate.ratio)))),
+        Tier::Warning => burn_rate
             .reset_in
-            .map(|reset_in| {
-                format_eta(reset_in)
-                    .yellow()
-                    .to_string()
-            })
-    } else {
-        None
+            .map(|reset_in| tier.paint(&format_eta(reset_in))),
+        Tier::Safe => None,
     };
 
     let limit_str = burn_rate
@@ -360,7 +372,7 @@ pub fn format_context(info: &ContextInfo, thresholds: &Thresholds) -> String {
 }
 
 /// Format amount as fixed two-decimal USD string
-pub fn format_currency(amount: f64) -> String {
+fn format_currency(amount: f64) -> String {
     format!("${:.2}", amount)
 }
 
