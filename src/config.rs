@@ -391,8 +391,7 @@ impl StatuslineConfig {
         }
 
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(&path, content)?;
-        Ok(())
+        crate::cache::write_atomic(&path, content.as_bytes())
     }
 }
 
