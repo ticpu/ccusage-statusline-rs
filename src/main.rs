@@ -16,6 +16,7 @@ mod paths;
 mod pricing;
 mod rate_limits;
 mod timing;
+mod transcript_scan;
 mod types;
 
 use anyhow::{Context, Result};

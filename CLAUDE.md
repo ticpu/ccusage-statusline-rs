@@ -13,6 +13,7 @@ src/
 ├── install.rs - statusLine entry in ~/.claude/settings.json
 ├── pricing.rs - LiteLLM price table from GitHub (24h cache)
 ├── blocks.rs - 5-hour billing blocks; dedup by {messageId}:{requestId}
+├── transcript_scan.rs - Suffix bisect and line parser feeding the block cache
 ├── burn_rate.rs - Burn rate from block cost and usage windows
 ├── context.rs - Context tokens from the transcript
 ├── diag.rs - warn! macro: fallback diagnostics, printed only when stderr is a terminal
