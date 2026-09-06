@@ -112,7 +112,7 @@ fn cost_of(entries: &[&CachedEntry], pricing: &PricingFetcher) -> f64 {
         .sum()
 }
 
-/// Create a block from start time, last-entry time, and entries (matching TypeScript logic).
+/// Create a block from start time, last-entry time, and entries.
 fn create_block_from_entries(
     start_time: DateTime<Utc>,
     actual_end_time: DateTime<Utc>,
@@ -122,7 +122,6 @@ fn create_block_from_entries(
 ) -> Block {
     let end_time = start_time + Duration::milliseconds(BLOCK_DURATION_MS);
 
-    // TypeScript logic: isActive = now - actualEndTime < sessionDuration && now < endTime
     let time_since_last_activity = now.timestamp_millis() - actual_end_time.timestamp_millis();
     let is_active = time_since_last_activity < BLOCK_DURATION_MS && now < end_time;
 

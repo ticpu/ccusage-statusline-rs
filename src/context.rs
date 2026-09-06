@@ -386,7 +386,6 @@ mod tests {
     fn test_transcript_compacted_limit() {
         let dir = crate::paths::test_scratch_dir("ctx-compacted");
         let path = dir.join("session.jsonl");
-        // tokens: input=10, cache_creation=500, cache_read=95000 → total=95510
         write_jsonl(
             &path,
             &[
@@ -430,7 +429,6 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(info.tokens, 95_510);
-        // 95510 / 1_000_000 * 100 = 9%
         assert_eq!(info.percentage, 9);
 
         fs::remove_dir_all(&dir).unwrap();
@@ -456,7 +454,6 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        // last entry wins: input=2000
         assert_eq!(info.tokens, 2_000);
 
         fs::remove_dir_all(&dir).unwrap();
