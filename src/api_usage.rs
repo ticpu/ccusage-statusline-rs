@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, TryLockError};
 use std::io::Read;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use crate::config::CacheSettings;
 use crate::paths::Env;
@@ -59,8 +59,6 @@ struct LimitModel {
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheEnvelope {
     #[serde(default)]
-    fetched_at: u64,
-    #[serde(default)]
     consecutive_errors: u32,
     response: Option<ApiResponse>,
 }
@@ -92,7 +90,6 @@ pub enum ApiUsageResult {
 }
 
 impl ApiUsageResult {
-    /// Convert to Option<ApiUsageData> for backward compatibility
     pub fn data(&self) -> Option<&ApiUsageData> {
         match self {
             ApiUsageResult::Ok(data) => Some(data),
@@ -236,6 +233,15 @@ fn fetch_or_use_cache(
     core_fetch_or_use_cache(env, existing, mtime_age, file, cache_settings)
 }
 
+/// How long a cache file stays fresh after `errors` consecutive failed fetches:
+/// the refresh interval doubled per failure, capped at the configured maximum.
+fn backoff_secs(errors: u32, cache_settings: &CacheSettings) -> u64 {
+    cache_settings
+        .api_refresh_secs
+        .saturating_mul(1u64 << errors.min(6))
+        .min(cache_settings.api_max_backoff_secs)
+}
+
 fn core_fetch_or_use_cache(
     env: &Env,
     existing: Option<CacheEnvelope>,
@@ -243,16 +249,11 @@ fn core_fetch_or_use_cache(
     file: &mut File,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
-    // Exponential backoff: min(refresh * 2^errors, max_backoff)
     let errors = existing
         .as_ref()
         .map_or(0, |e| e.consecutive_errors);
-    let uncapped = cache_settings
-        .api_refresh_secs
-        .saturating_mul(1u64 << errors.min(6));
-    let effective_fresh = uncapped.min(cache_settings.api_max_backoff_secs);
 
-    if mtime_age < Duration::from_secs(effective_fresh) {
+    if mtime_age < Duration::from_secs(backoff_secs(errors, cache_settings)) {
         // Within backoff window — return cached data without a network call
         if let Some(response) = existing
             .as_ref()
@@ -275,7 +276,6 @@ fn core_fetch_or_use_cache(
         Ok(api_response) => {
             let data = parse_api_response(&api_response);
             let envelope = CacheEnvelope {
-                fetched_at: now_epoch(),
                 consecutive_errors: 0,
                 response: Some(api_response),
             };
@@ -292,27 +292,19 @@ fn core_fetch_or_use_cache(
                 })
                 .map(parse_api_response);
 
-            let mut env = existing.unwrap_or(CacheEnvelope {
-                fetched_at: now_epoch(),
+            let mut envelope = existing.unwrap_or(CacheEnvelope {
                 consecutive_errors: 0,
                 response: None,
             });
-            env.consecutive_errors = env
+            envelope.consecutive_errors = envelope
                 .consecutive_errors
                 .saturating_add(1);
-            let next_backoff = cache_settings
-                .api_refresh_secs
-                .saturating_mul(
-                    1u64 << env
-                        .consecutive_errors
-                        .min(6),
-                )
-                .min(cache_settings.api_max_backoff_secs);
+            let next_backoff = backoff_secs(envelope.consecutive_errors, cache_settings);
             warn!(
                 "API usage: fetch failed (attempt {}), next retry in {}s: {:#}",
-                env.consecutive_errors, next_backoff, fetch_err
+                envelope.consecutive_errors, next_backoff, fetch_err
             );
-            write_envelope_locked(file, &env)?;
+            write_envelope_locked(file, &envelope)?;
             if let Some(data) = stale {
                 Ok(data)
             } else {
@@ -335,13 +327,6 @@ fn write_envelope(envelope: &CacheEnvelope, cache_path: &Path) -> Result<()> {
     let result = write_envelope_locked(&mut file, envelope);
     file.unlock()?;
     result
-}
-
-fn now_epoch() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 fn read_envelope_from_file(file: &mut File) -> Result<CacheEnvelope> {
@@ -468,7 +453,6 @@ mod tests {
 
     fn make_test_envelope(utilization_5h: f64, utilization_7d: f64, errors: u32) -> CacheEnvelope {
         CacheEnvelope {
-            fetched_at: now_epoch(),
             consecutive_errors: errors,
             response: Some(ApiResponse {
                 five_hour: UsageLimit {
@@ -487,7 +471,6 @@ mod tests {
 
     fn make_error_envelope(errors: u32) -> CacheEnvelope {
         CacheEnvelope {
-            fetched_at: now_epoch(),
             consecutive_errors: errors,
             response: None,
         }

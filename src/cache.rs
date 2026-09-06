@@ -8,9 +8,9 @@ use tempfile::NamedTempFile;
 
 use crate::warn;
 
-/// Semaphore cache for fast statusline rendering.
-/// `date` and `transcript_path` are omitted — write-only fields dropped; old cache files
-/// with those extra fields still parse correctly (serde ignores unknown fields).
+/// A rendered statusline and the two clocks a reader checks it against.
+/// Fields a past version wrote and this one does not are ignored rather than rejected,
+/// so an upgrade costs no cache misses.
 #[derive(Debug, Serialize, Deserialize)]
 struct Semaphore {
     last_output: String,
