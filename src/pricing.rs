@@ -1,4 +1,5 @@
 use crate::types::{ModelPricing, TokenPrices, UsageTokens};
+use crate::warn;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,6 @@ struct PricingCache {
     timestamp: i64,
     models: HashMap<String, ModelPricing>,
 }
-use std::io::IsTerminal;
 use std::path::Path;
 
 /// The upstream table is a couple of megabytes and grows with every model added.
@@ -38,9 +38,7 @@ impl PricingFetcher {
         let cached: Option<PricingCache> = match crate::cache::read_json(&pricing_cache_path) {
             Ok(v) => v,
             Err(e) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("pricing cache read error: {:#}", e);
-                }
+                warn!("pricing cache read error: {:#}", e);
                 None
             }
         };
@@ -68,27 +66,21 @@ impl PricingFetcher {
                     models: serde_json::from_slice(&body)
                         .context("Failed to parse pricing JSON")?,
                 };
-                if let Err(e) = crate::cache::write_json_atomic(&pricing_cache_path, &cache)
-                    && std::io::stderr().is_terminal()
-                {
-                    eprintln!("pricing cache write failed: {:#}", e);
+                if let Err(e) = crate::cache::write_json_atomic(&pricing_cache_path, &cache) {
+                    warn!("pricing cache write failed: {:#}", e);
                 }
                 let PricingCache { models, .. } = cache;
                 Ok(models)
             }
             Ok(response) => {
                 let status = response.status();
-                if std::io::stderr().is_terminal() {
-                    eprintln!("pricing fetch failed (HTTP {}), using stale cache", status);
-                }
+                warn!("pricing fetch failed (HTTP {}), using stale cache", status);
                 cached
                     .map(|c| c.models)
                     .context("Failed to fetch pricing data and no cache available")
             }
             Err(e) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("pricing fetch error, using stale cache: {:#}", e);
-                }
+                warn!("pricing fetch error, using stale cache: {:#}", e);
                 if let Some(c) = cached {
                     Ok(c.models)
                 } else {
@@ -168,12 +160,10 @@ fn estimate_cost_fallback(model: Option<&str>, usage: &UsageTokens) -> f64 {
         Some(m) if m.contains("haiku") => prices_from(1e-6, 5e-6),
         Some(m) if m.contains("sonnet") => prices_from(3e-6, 15e-6),
         other => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "pricing: {} not in LiteLLM and not a known family, estimating at Sonnet rates",
-                    other.unwrap_or("(no model id)")
-                );
-            }
+            warn!(
+                "pricing: {} not in LiteLLM and not a known family, estimating at Sonnet rates",
+                other.unwrap_or("(no model id)")
+            );
             prices_from(3e-6, 15e-6)
         }
     };

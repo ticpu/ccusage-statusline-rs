@@ -2,11 +2,12 @@ use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{ErrorKind, IsTerminal, Read};
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use crate::cache::get_cache_dir;
 use crate::types::{ApiUsageData, RateLimits, UsageWindow};
+use crate::warn;
 
 /// Stored rate limit reading with DateTime
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,13 +137,11 @@ fn read_store_at(store_path: &Path) -> Result<RateLimitsStore> {
     let mut store: RateLimitsStore = match serde_json::from_str(&contents) {
         Ok(s) => s,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "Rate-limit store parse error ({}): {:#}",
-                    store_path.display(),
-                    e
-                );
-            }
+            warn!(
+                "Rate-limit store parse error ({}): {:#}",
+                store_path.display(),
+                e
+            );
             RateLimitsStore::default()
         }
     };

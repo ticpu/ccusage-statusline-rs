@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::io::{IsTerminal, Read};
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
 use crate::cache::get_cache_dir;
+use crate::warn;
 
 const VERSION_CACHE_FILE: &str = "claude-version-cache.json";
 
@@ -42,9 +43,7 @@ fn get_cached_version() -> Option<String> {
         }
         Ok(None) => None,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("version cache read error: {:#}", e);
-            }
+            warn!("version cache read error: {:#}", e);
             None
         }
     }
@@ -55,9 +54,7 @@ fn save_version_cache(version: &str, mtime: u64) {
     let cache_dir = match get_cache_dir() {
         Ok(d) => d,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("version cache: could not get cache dir: {:#}", e);
-            }
+            warn!("version cache: could not get cache dir: {:#}", e);
             return;
         }
     };
@@ -66,10 +63,8 @@ fn save_version_cache(version: &str, mtime: u64) {
         version: version.to_string(),
         binary_mtime: mtime,
     };
-    if let Err(e) = crate::cache::write_json_atomic(&cache_path, &cache)
-        && std::io::stderr().is_terminal()
-    {
-        eprintln!(
+    if let Err(e) = crate::cache::write_json_atomic(&cache_path, &cache) {
+        warn!(
             "version cache write failed (claude --version will run each invocation): {:#}",
             e
         );
@@ -92,8 +87,8 @@ fn fetch_claude_version() -> Option<String> {
         Ok(c) => c,
         Err(e) => {
             // Not installed is the ordinary case and says nothing worth reporting.
-            if e.kind() != std::io::ErrorKind::NotFound && std::io::stderr().is_terminal() {
-                eprintln!("claude --version could not start: {e}");
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!("claude --version could not start: {e}");
             }
             return None;
         }
@@ -104,15 +99,11 @@ fn fetch_claude_version() -> Option<String> {
         Ok(None) => {
             let _ = child.kill();
             let _ = child.wait();
-            if std::io::stderr().is_terminal() {
-                eprintln!("claude --version timed out, skipping update check");
-            }
+            warn!("claude --version timed out, skipping update check");
             return None;
         }
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("claude --version failed: {e}");
-            }
+            warn!("claude --version failed: {e}");
             return None;
         }
     };

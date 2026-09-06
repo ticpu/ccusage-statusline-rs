@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, TryLockError};
-use std::io::{IsTerminal, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -10,6 +10,7 @@ use crate::cache::get_cache_dir;
 use crate::config::CacheSettings;
 use crate::paths::claude_config_dir;
 use crate::types::{ApiUsageData, PlanType, ScopedUsageWindow, UsageWindow};
+use crate::warn;
 
 /// Typed marker for HTTP 429 rate-limit responses; survives anyhow context wrapping.
 #[derive(Debug)]
@@ -151,12 +152,10 @@ pub fn get_plan_type() -> PlanType {
             _ => PlanType::Api,
         },
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "get_plan_type: credentials unreadable, defaulting to Api: {:#}",
-                    e
-                );
-            }
+            warn!(
+                "get_plan_type: credentials unreadable, defaulting to Api: {:#}",
+                e
+            );
             PlanType::Api
         }
     }
@@ -172,9 +171,7 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
     let cache_path = match get_api_cache_path() {
         Ok(p) => p,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("Failed to get API cache path: {:#}", e);
-            }
+            warn!("Failed to get API cache path: {:#}", e);
             return ApiUsageResult::Failed;
         }
     };
@@ -187,9 +184,7 @@ pub fn fetch_usage(cache_settings: &CacheSettings) -> ApiUsageResult {
             {
                 ApiUsageResult::RateLimited
             } else {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("Failed to fetch API usage: {:#}", e);
-                }
+                warn!("Failed to fetch API usage: {:#}", e);
                 ApiUsageResult::Failed
             }
         }
@@ -236,9 +231,7 @@ fn fetch_or_use_cache(file: &mut File, cache_settings: &CacheSettings) -> Result
         match read_envelope_from_file(file) {
             Ok(envelope) => Some(envelope),
             Err(e) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("API cache parse error (treating as absent): {:#}", e);
-                }
+                warn!("API cache parse error (treating as absent): {:#}", e);
                 None
             }
         }
@@ -320,12 +313,10 @@ fn core_fetch_or_use_cache(
                         .min(6),
                 )
                 .min(cache_settings.api_max_backoff_secs);
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "API usage: fetch failed (attempt {}), next retry in {}s: {:#}",
-                    env.consecutive_errors, next_backoff, fetch_err
-                );
-            }
+            warn!(
+                "API usage: fetch failed (attempt {}), next retry in {}s: {:#}",
+                env.consecutive_errors, next_backoff, fetch_err
+            );
             write_envelope_locked(file, &env)?;
             if let Some(data) = stale {
                 Ok(data)
@@ -453,20 +444,17 @@ fn fetch_api_response() -> Result<ApiResponse> {
     let status = response.status();
     if !status.is_success() {
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            if std::io::stderr().is_terminal() {
-                let retry_after = response
+            warn!(
+                "API 429: Retry-After={:?}, headers={:?}",
+                response
                     .headers()
                     .get("retry-after")
                     .and_then(|v| {
                         v.to_str()
                             .ok()
-                    });
-                eprintln!(
-                    "API 429: Retry-After={:?}, headers={:?}",
-                    retry_after,
-                    response.headers()
-                );
-            }
+                    }),
+                response.headers()
+            );
             return Err(anyhow::Error::new(RateLimited));
         }
         anyhow::bail!("API returned status: {}", status);

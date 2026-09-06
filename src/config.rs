@@ -1,5 +1,6 @@
 use crate::config_migration::{self, CURRENT_VERSION};
 use crate::paths::claude_config_dir;
+use crate::warn;
 use anyhow::{Context as _, Result};
 use inquire::ui::{RenderConfig, Styled};
 use inquire::{CustomType, MultiSelect, Select};
@@ -160,9 +161,7 @@ impl Thresholds {
             ("context_danger", &mut self.context_danger),
         ] {
             if *value > THRESHOLD_MAX {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("config: {name} is {value}, clamping to {THRESHOLD_MAX}",);
-                }
+                warn!("config: {name} is {value}, clamping to {THRESHOLD_MAX}",);
                 *value = THRESHOLD_MAX;
             }
         }
@@ -229,9 +228,7 @@ where
         match serde_json::from_value::<StatusElement>(value.clone()) {
             Ok(element) => out.push(element),
             Err(_) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("config: ignoring unknown statusline element {value}");
-                }
+                warn!("config: ignoring unknown statusline element {value}");
             }
         }
     }
@@ -312,18 +309,13 @@ impl StatuslineConfig {
                     .clamp_reporting();
                 // A failed write leaves the file at its old schema; the migration is
                 // recomputed on every load, so the only cost is doing it again.
-                if migrated
-                    && let Err(e) = config.save()
-                    && std::io::stderr().is_terminal()
-                {
-                    eprintln!("config: migrated settings could not be saved: {:#}", e);
+                if migrated && let Err(e) = config.save() {
+                    warn!("config: migrated settings could not be saved: {:#}", e);
                 }
                 Ok(config)
             }
             Err(e) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("Config parse error ({}): {:#}", path.display(), e);
-                }
+                warn!("Config parse error ({}): {:#}", path.display(), e);
                 Ok(Self::default())
             }
         }
@@ -335,9 +327,7 @@ impl StatuslineConfig {
         match Self::load() {
             Ok(config) => config,
             Err(e) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("Config load failed, using defaults: {:#}", e);
-                }
+                warn!("Config load failed, using defaults: {:#}", e);
                 Self::default()
             }
         }

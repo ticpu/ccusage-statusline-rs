@@ -1,4 +1,5 @@
 use crate::types::UsageTokens;
+use crate::warn;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -109,7 +110,14 @@ pub fn with_cache<T>(path: &Path, f: impl FnOnce(&mut EntryCache) -> (T, bool)) 
         Ok(0) => EntryCache::default(),
         // A corrupt cache is only ever a slower render, so it is rebuilt rather than
         // reported as a failure.
-        Ok(_) => serde_json::from_str(&contents).unwrap_or_default(),
+        Ok(_) => serde_json::from_str(&contents).unwrap_or_else(|e| {
+            warn!(
+                "Entry cache {} unreadable, rebuilding: {:#}",
+                path.display(),
+                e
+            );
+            EntryCache::default()
+        }),
         Err(e) => {
             file.unlock()?;
             return Err(e)

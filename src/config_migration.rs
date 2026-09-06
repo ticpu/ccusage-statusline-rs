@@ -1,6 +1,6 @@
+use crate::warn;
 use serde_json::Value;
 use std::collections::HashSet;
-use std::io::IsTerminal;
 
 /// Schema version this binary writes. Bump with every entry added to MIGRATIONS.
 pub const CURRENT_VERSION: u64 = 1;
@@ -22,11 +22,9 @@ pub fn migrate(doc: &mut Value) -> bool {
         .unwrap_or(0);
 
     if from > CURRENT_VERSION {
-        if std::io::stderr().is_terminal() {
-            eprintln!(
-                "config: written by a newer version (schema v{from}, this binary knows v{CURRENT_VERSION}); unknown settings are ignored"
-            );
-        }
+        warn!(
+            "config: written by a newer version (schema v{from}, this binary knows v{CURRENT_VERSION}); unknown settings are ignored"
+        );
         return false;
     }
     if from == CURRENT_VERSION {

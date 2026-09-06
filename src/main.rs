@@ -7,6 +7,7 @@ mod claude_update;
 mod config;
 mod config_migration;
 mod context;
+mod diag;
 mod entry_cache;
 mod format;
 mod http;
@@ -155,8 +156,8 @@ fn run_piped_mode() -> Result<()> {
                     .map(|io| io.kind() == ErrorKind::NotFound)
                     .unwrap_or(false)
             });
-        if !is_not_found && std::io::stderr().is_terminal() {
-            eprintln!("Output cache update failed: {:#}", e);
+        if !is_not_found {
+            warn!("Output cache update failed: {:#}", e);
         }
     }
 

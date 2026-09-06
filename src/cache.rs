@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, IsTerminal, Read, Seek, Write};
+use std::io::{ErrorKind, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tempfile::NamedTempFile;
+
+use crate::warn;
 
 /// Semaphore cache for fast statusline rendering.
 /// `date` and `transcript_path` are omitted — write-only fields dropped; old cache files
@@ -171,13 +173,11 @@ pub fn try_get_cached(
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "Output cache open failed ({}): {:#}",
-                    cache_path.display(),
-                    e
-                );
-            }
+            warn!(
+                "Output cache open failed ({}): {:#}",
+                cache_path.display(),
+                e
+            );
             return Ok(None);
         }
     };
@@ -187,13 +187,11 @@ pub fn try_get_cached(
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => return Ok(None),
         Err(TryLockError::Error(e)) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "Output cache lock failed ({}): {:#}",
-                    cache_path.display(),
-                    e
-                );
-            }
+            warn!(
+                "Output cache lock failed ({}): {:#}",
+                cache_path.display(),
+                e
+            );
             return Ok(None);
         }
     }
@@ -204,13 +202,11 @@ pub fn try_get_cached(
     let semaphore: Semaphore = match serde_json::from_str(&contents) {
         Ok(s) => s,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "Output cache parse failed ({}): {:#}",
-                    cache_path.display(),
-                    e
-                );
-            }
+            warn!(
+                "Output cache parse failed ({}): {:#}",
+                cache_path.display(),
+                e
+            );
             return Ok(None);
         }
     };
@@ -227,9 +223,7 @@ pub fn try_get_cached(
     let current_mtime = match path_mtime_secs(transcript_path) {
         Ok(m) => m,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("Output cache transcript stat failed: {:#}", e);
-            }
+            warn!("Output cache transcript stat failed: {:#}", e);
             return Ok(None);
         }
     };
@@ -285,9 +279,8 @@ pub fn cleanup_stale_locks(cache_dir: &Path, ttl_secs: u64) {
     if let Err(e) = open_private_rw(&marker).and_then(|f| {
         f.set_len(0)
             .context("truncate")
-    }) && std::io::stderr().is_terminal()
-    {
-        eprintln!(
+    }) {
+        warn!(
             "Cache cleanup marker {} not writable, cleanup will rescan every run: {:#}",
             marker.display(),
             e
@@ -297,13 +290,11 @@ pub fn cleanup_stale_locks(cache_dir: &Path, ttl_secs: u64) {
     let entries = match fs::read_dir(cache_dir) {
         Ok(e) => e,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "Cache cleanup skipped, cannot list {}: {:#}",
-                    cache_dir.display(),
-                    e
-                );
-            }
+            warn!(
+                "Cache cleanup skipped, cannot list {}: {:#}",
+                cache_dir.display(),
+                e
+            );
             return;
         }
     };
@@ -320,18 +311,15 @@ pub fn cleanup_stale_locks(cache_dir: &Path, ttl_secs: u64) {
         let mtime = match fs::metadata(&path).and_then(|m| m.modified()) {
             Ok(m) => m,
             Err(e) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!("Cache cleanup cannot stat {}: {:#}", path.display(), e);
-                }
+                warn!("Cache cleanup cannot stat {}: {:#}", path.display(), e);
                 continue;
             }
         };
         if let Ok(age) = mtime.elapsed()
             && age.as_secs() > ttl_secs
             && let Err(e) = fs::remove_file(&path)
-            && std::io::stderr().is_terminal()
         {
-            eprintln!("Cache cleanup cannot remove {}: {:#}", path.display(), e);
+            warn!("Cache cleanup cannot remove {}: {:#}", path.display(), e);
         }
     }
 }

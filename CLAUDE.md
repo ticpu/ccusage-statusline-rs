@@ -15,6 +15,7 @@ src/
 ├── blocks.rs - 5-hour billing blocks; dedup by {messageId}:{requestId}
 ├── burn_rate.rs - Burn rate from block cost and usage windows
 ├── context.rs - Context tokens from the transcript
+├── diag.rs - warn! macro: fallback diagnostics, printed only when stderr is a terminal
 ├── entry_cache.rs - Incremental transcript parse cache (resume by byte offset)
 ├── cache.rs - Semaphore-file output cache under XDG_RUNTIME_DIR, shared cache IO
 ├── api_usage.rs - Usage endpoint client (OAuth from ~/.claude/.credentials.json)

@@ -1,10 +1,10 @@
 use crate::cache::get_cache_dir;
 use crate::claude_binary;
 use crate::config::{StatusElement, StatuslineConfig};
+use crate::warn;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -51,9 +51,7 @@ fn read_cache(channel: VersionChannel) -> Option<UpdateCache> {
     match crate::cache::read_json::<UpdateCache>(&cache_path) {
         Ok(v) => v,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("update cache read error: {:#}", e);
-            }
+            warn!("update cache read error: {:#}", e);
             None
         }
     }
@@ -177,9 +175,7 @@ pub fn check_update_available(config: &StatuslineConfig) -> Option<String> {
     let latest_version = match fetch_latest_version(channel) {
         Ok(version) => Some(version),
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("update check failed, using cached version: {:#}", e);
-            }
+            warn!("update check failed, using cached version: {:#}", e);
             read_cache(channel).and_then(|c| c.latest_version)
         }
     };
@@ -189,10 +185,8 @@ pub fn check_update_available(config: &StatuslineConfig) -> Option<String> {
         latest_version: latest_version.clone(),
         checked_at: Utc::now(),
     };
-    if let Err(e) = write_cache(channel, &new_cache)
-        && std::io::stderr().is_terminal()
-    {
-        eprintln!("update cache write failed: {:#}", e);
+    if let Err(e) = write_cache(channel, &new_cache) {
+        warn!("update cache write failed: {:#}", e);
     }
 
     // Check if update available

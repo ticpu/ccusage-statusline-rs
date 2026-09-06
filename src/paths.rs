@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+
+use crate::warn;
 
 pub fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
@@ -194,12 +195,10 @@ fn entry_is_fresh(entry: &fs::DirEntry, path: &Path, min_mtime_secs: Option<i64>
 }
 
 fn warn_unstatable(path: &Path) {
-    if std::io::stderr().is_terminal() {
-        eprintln!(
-            "transcript scan: cannot read mtime of {}, treating as current",
-            path.display()
-        );
-    }
+    warn!(
+        "transcript scan: cannot read mtime of {}, treating as current",
+        path.display()
+    );
 }
 
 /// Collect `*.jsonl` under `dir`, descending into subdirectories. Sub-agent
@@ -247,7 +246,5 @@ fn collect_jsonl_files(dir: &Path, min_mtime_secs: Option<i64>, files: &mut Vec<
 }
 
 pub fn warn_skipped(path: &Path, e: &std::io::Error) {
-    if std::io::stderr().is_terminal() {
-        eprintln!("transcript scan skipped {}: {}", path.display(), e);
-    }
+    warn!("transcript scan skipped {}: {}", path.display(), e);
 }

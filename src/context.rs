@@ -1,3 +1,4 @@
+use crate::warn;
 use crate::{
     paths::claude_config_json_path,
     types::{ContextInfo, ContextWindowData, HookData, UsageData},
@@ -5,7 +6,7 @@ use crate::{
 use anyhow::Result;
 use serde::Deserialize;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, ErrorKind, IsTerminal};
+use std::io::{BufRead, BufReader, ErrorKind};
 
 // Reconstruction of Claude Code's managed context window. The statusline payload only
 // carries the raw model window, but what the user actually hits is auto-compact, which
@@ -142,9 +143,7 @@ fn auto_compact_enabled() -> bool {
     let config_path = match claude_config_json_path() {
         Ok(p) => p,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("Context limit: could not determine config path: {e:#}");
-            }
+            warn!("Context limit: could not determine config path: {e:#}");
             return default_auto_compact();
         }
     };
@@ -153,23 +152,19 @@ fn auto_compact_enabled() -> bool {
         Ok(content) => match serde_json::from_str::<ClaudeConfig>(&content) {
             Ok(cfg) => Some(cfg),
             Err(e) => {
-                if std::io::stderr().is_terminal() {
-                    eprintln!(
-                        "Context limit: failed to parse {}: {e:#}",
-                        config_path.display()
-                    );
-                }
+                warn!(
+                    "Context limit: failed to parse {}: {e:#}",
+                    config_path.display()
+                );
                 None
             }
         },
         Err(e) if e.kind() == ErrorKind::NotFound => None,
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!(
-                    "Context limit: failed to read {}: {e:#}",
-                    config_path.display()
-                );
-            }
+            warn!(
+                "Context limit: failed to read {}: {e:#}",
+                config_path.display()
+            );
             None
         }
     };
@@ -186,9 +181,7 @@ fn calculate_context_from_transcript(
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            if std::io::stderr().is_terminal() {
-                eprintln!("Context: cannot read {transcript_path}: {e:#}");
-            }
+            warn!("Context: cannot read {transcript_path}: {e:#}");
             return Ok(None);
         }
     };
