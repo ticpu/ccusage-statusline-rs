@@ -323,6 +323,26 @@ mod tests {
         let mut reader =
             BufReader::with_capacity(BUFREADER_CAPACITY, fs::File::open(&path).unwrap());
         let off = seek_to_cutoff(&mut reader, len, "2026-09-01T00:00:00.000Z").unwrap();
-        assert!(off <= len);
+
+        // A cutoff past every entry must land where nothing is left to read.
+        reader
+            .seek(SeekFrom::Start(off))
+            .unwrap();
+        let mut found = 0;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader
+                .read_line(&mut line)
+                .unwrap()
+                == 0
+            {
+                break;
+            }
+            if line_timestamp(&line).is_some() {
+                found += 1;
+            }
+        }
+        assert_eq!(found, 0, "cutoff past every entry must yield no entries");
     }
 }

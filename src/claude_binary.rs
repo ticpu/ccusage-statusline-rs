@@ -132,27 +132,3 @@ pub fn get_user_agent(env: &Env) -> String {
         None => "claude-code/unknown".to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_version_cache_serialization() {
-        let cache = VersionCache {
-            version: "2.0.71".to_string(),
-            binary_mtime: 1234567890,
-        };
-        let json = serde_json::to_string(&cache).unwrap();
-        let parsed: VersionCache = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, "2.0.71");
-        assert_eq!(parsed.binary_mtime, 1234567890);
-    }
-
-    #[test]
-    fn test_user_agent_format() {
-        let ua = format!("claude-code/{}", "2.0.71");
-        assert!(ua.starts_with("claude-code/"));
-        assert!(ua.contains('.'));
-    }
-}

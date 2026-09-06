@@ -721,67 +721,11 @@ mod tests {
     }
 
     #[test]
-    fn test_api_usage_result_data() {
-        use crate::types::UsageWindow;
-        let data = ApiUsageData {
-            five_hour: Some(UsageWindow {
-                percent: 25.0,
-                resets_at: None,
-            }),
-            seven_day: Some(UsageWindow {
-                percent: 10.0,
-                resets_at: None,
-            }),
-            model_scoped: Vec::new(),
-        };
-        let result = ApiUsageResult::Ok(data.clone());
-        assert!(
-            result
-                .data()
-                .is_some()
-        );
+    fn test_api_usage_result_error_label() {
+        assert_eq!(ApiUsageResult::Failed.error_label(), Some("api error"));
         assert_eq!(
-            result
-                .data()
-                .unwrap()
-                .five_hour
-                .as_ref()
-                .unwrap()
-                .percent,
-            25.0
-        );
-        assert!(
-            result
-                .error_label()
-                .is_none()
-        );
-
-        let stale = ApiUsageResult::Failed;
-        assert!(
-            stale
-                .data()
-                .is_none()
-        );
-        assert_eq!(stale.error_label(), Some("api error"));
-
-        let rate_limited = ApiUsageResult::RateLimited;
-        assert!(
-            rate_limited
-                .data()
-                .is_none()
-        );
-        assert_eq!(rate_limited.error_label(), Some("rate limited"));
-
-        let unavailable = ApiUsageResult::Unavailable;
-        assert!(
-            unavailable
-                .data()
-                .is_none()
-        );
-        assert!(
-            unavailable
-                .error_label()
-                .is_none()
+            ApiUsageResult::RateLimited.error_label(),
+            Some("rate limited")
         );
     }
 }

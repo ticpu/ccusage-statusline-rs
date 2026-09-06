@@ -173,7 +173,7 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
     }
 
     // Only the danger band scales the ETA by the burn ratio; the warning band shows the
-    // plain time to reset, which is what test_eta_only_warning_zone guards.
+    // plain time to reset, which is what test_eta_only_table's warning-zone case guards.
     let tier = Tier::of(
         burn_rate.ratio,
         thresholds.burn_rate_warning_ratio(),
@@ -251,7 +251,7 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             ..Default::default()
         };
-        let t = default_thresholds();
+        let t = Thresholds::default();
         let rate_api =
             format_burn_rate_component(&safe_burn, PlanType::Api, BurnRateDisplay::Rate, &t)
                 .unwrap();
@@ -320,7 +320,7 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             ..Default::default()
         };
-        let t = default_thresholds();
+        let t = Thresholds::default();
         let result = format_burn_rate_component(
             &burn_with_7d,
             PlanType::Subscription,
@@ -366,7 +366,7 @@ mod tests {
             critical_limit: LimitType::FiveHour,
             ..Default::default()
         };
-        let t = default_thresholds();
+        let t = Thresholds::default();
         let result =
             format_burn_rate_component(&burn, PlanType::Subscription, BurnRateDisplay::Rate, &t)
                 .unwrap();
@@ -398,92 +398,80 @@ mod tests {
             reset_in: Some(Duration::hours(2) + Duration::minutes(15)),
             ..Default::default()
         };
-        let result = verbose(&burn, PlanType::Subscription, true, true);
+        let result = rendered(&burn, PlanType::Subscription, true, true);
         assert_eq!(result, "🔥limit");
     }
 
-    #[test]
-    fn test_format_burn_rate_eta_over_100_5h() {
-        let burn = BurnRate {
-            ratio: 1.4,
-            seven_day_ratio: 0.5,
-            critical_limit: LimitType::FiveHour,
-            reset_in: Some(Duration::hours(3)),
-            seven_day_reset_in: Some(Duration::hours(100)),
-            ..Default::default()
-        };
-        let result = verbose(&burn, PlanType::Subscription, true, true);
-        let stripped = strip_ansi_codes(&result);
-        // 3h / 1.4 = 2.14h → rounds to 2h
-        assert!(
-            stripped.contains("[⏱2h]"),
-            "expected '[⏱2h]' in '{}'",
-            stripped
-        );
+    /// One case per near-identical rate+ETA test the table replaces; ratio and reset
+    /// times vary, but each still needs the rendered ETA to be present verbatim.
+    struct EtaCase {
+        ratio: f64,
+        seven_day_ratio: f64,
+        critical_limit: LimitType,
+        reset_in: Duration,
+        seven_day_reset_in: Option<Duration>,
+        expect: &'static [&'static str],
     }
 
     #[test]
-    fn test_format_burn_rate_eta_over_100_7d() {
-        let burn = BurnRate {
-            ratio: 1.57,
-            seven_day_ratio: 0.5,
-            critical_limit: LimitType::SevenDay,
-            reset_in: Some(Duration::hours(73)),
-            seven_day_reset_in: Some(Duration::hours(100)),
-            ..Default::default()
-        };
-        let result = verbose(&burn, PlanType::Subscription, true, true);
-        let stripped = strip_ansi_codes(&result);
-        assert!(
-            stripped.contains("[⏱1d22h]"),
-            "expected '[⏱1d22h]' in '{}'",
-            stripped
-        );
-    }
+    fn test_format_burn_rate_eta_table() {
+        let cases = [
+            EtaCase {
+                // 3h / 1.4 = 2.14h → rounds to 2h
+                ratio: 1.4,
+                seven_day_ratio: 0.5,
+                critical_limit: LimitType::FiveHour,
+                reset_in: Duration::hours(3),
+                seven_day_reset_in: Some(Duration::hours(100)),
+                expect: &["[⏱2h]"],
+            },
+            EtaCase {
+                // 73h / 1.57 = 46.5h = 1d22h
+                ratio: 1.57,
+                seven_day_ratio: 0.5,
+                critical_limit: LimitType::SevenDay,
+                reset_in: Duration::hours(73),
+                seven_day_reset_in: Some(Duration::hours(100)),
+                expect: &["[⏱1d22h]"],
+            },
+            EtaCase {
+                // 3h / 1.4 = 2.14h → 2h; 100h / 1.1 = 90.9h = 3d19h
+                ratio: 1.4,
+                seven_day_ratio: 1.1,
+                critical_limit: LimitType::FiveHour,
+                reset_in: Duration::hours(3),
+                seven_day_reset_in: Some(Duration::hours(100)),
+                expect: &["[⏱2h]", "[⏱3d19h]"],
+            },
+            EtaCase {
+                // 178m / 1.5 = 118.67m → 118m (< 2h, shows minutes)
+                ratio: 1.5,
+                seven_day_ratio: 0.5,
+                critical_limit: LimitType::FiveHour,
+                reset_in: Duration::minutes(178),
+                seven_day_reset_in: None,
+                expect: &["[⏱118m]"],
+            },
+        ];
 
-    #[test]
-    fn test_format_burn_rate_eta_both_over_100() {
-        let burn = BurnRate {
-            ratio: 1.4,
-            seven_day_ratio: 1.1,
-            critical_limit: LimitType::FiveHour,
-            reset_in: Some(Duration::hours(3)),
-            seven_day_reset_in: Some(Duration::hours(100)),
-            ..Default::default()
-        };
-        let result = verbose(&burn, PlanType::Subscription, true, true);
-        let stripped = strip_ansi_codes(&result);
-        // 3h / 1.4 = 2.14h → rounds to 2h
-        assert!(
-            stripped.contains("[⏱2h]"),
-            "expected primary ETA '[⏱2h]' in '{}'",
-            stripped
-        );
-        // 100h / 1.1 = 90.9h = 3d19h
-        assert!(
-            stripped.contains("[⏱3d19h]"),
-            "expected 7d ETA '[⏱3d19h]' in '{}'",
-            stripped
-        );
-    }
-
-    #[test]
-    fn test_format_burn_rate_eta_minutes() {
-        let burn = BurnRate {
-            ratio: 1.5,
-            seven_day_ratio: 0.5,
-            critical_limit: LimitType::FiveHour,
-            // 178m / 1.5 = 118.67m → 118m (< 2h, shows minutes)
-            reset_in: Some(Duration::minutes(178)),
-            ..Default::default()
-        };
-        let result = verbose(&burn, PlanType::Subscription, true, true);
-        let stripped = strip_ansi_codes(&result);
-        assert!(
-            stripped.contains("[⏱118m]"),
-            "expected '[⏱118m]' in '{}'",
-            stripped
-        );
+        for case in cases {
+            let burn = BurnRate {
+                ratio: case.ratio,
+                seven_day_ratio: case.seven_day_ratio,
+                critical_limit: case.critical_limit,
+                reset_in: Some(case.reset_in),
+                seven_day_reset_in: case.seven_day_reset_in,
+                ..Default::default()
+            };
+            let result = rendered(&burn, PlanType::Subscription, true, true);
+            let stripped = strip_ansi_codes(&result);
+            for substr in case.expect {
+                assert!(
+                    stripped.contains(substr),
+                    "expected '{substr}' in '{stripped}'"
+                );
+            }
+        }
     }
 
     #[test]
@@ -496,7 +484,7 @@ mod tests {
             seven_day_reset_in: Some(Duration::hours(100)),
             ..Default::default()
         };
-        let result = verbose(&burn, PlanType::Subscription, true, true);
+        let result = rendered(&burn, PlanType::Subscription, true, true);
         assert!(
             !result.contains("⏱"),
             "should not contain ETA when ratio < 1.0"
@@ -513,7 +501,7 @@ mod tests {
             seven_day_reset_in: Some(Duration::hours(100)),
             ..Default::default()
         };
-        let result = verbose(&burn, PlanType::Subscription, true, false);
+        let result = rendered(&burn, PlanType::Subscription, true, false);
         assert!(
             !result.contains("⏱"),
             "should not contain ETA when show_eta=false"
@@ -530,7 +518,7 @@ mod tests {
             reset_in: Some(Duration::hours(2)),
             ..Default::default()
         };
-        let result = verbose(&burn, PlanType::Subscription, false, true);
+        let result = rendered(&burn, PlanType::Subscription, false, true);
         assert!(result.contains("limit"), "expected 'limit' in '{}'", result);
         assert!(
             !result.contains("🔥"),
@@ -539,46 +527,58 @@ mod tests {
     }
 
     #[test]
-    fn test_eta_only_over_100_5h() {
-        let burn = BurnRate {
-            ratio: 1.4,
-            seven_day_ratio: 0.5,
-            critical_limit: LimitType::FiveHour,
-            reset_in: Some(Duration::hours(3)),
-            seven_day_reset_in: Some(Duration::hours(100)),
-            ..Default::default()
-        };
-        let result = verbose(&burn, PlanType::Subscription, false, true);
-        let stripped = strip_ansi_codes(&result);
-        // 3h / 1.4 = 2.14h → rounds to 2h
-        assert!(stripped.contains("2h"), "expected '2h' in '{}'", stripped);
-        assert!(
-            stripped.contains("5h"),
-            "expected '5h' limit in '{}'",
-            stripped
-        );
-        assert!(
-            !result.contains("🔥"),
-            "eta-only should not contain fire emoji"
-        );
-    }
+    fn test_eta_only_table() {
+        let cases = [
+            EtaCase {
+                // 3h / 1.4 = 2.14h → rounds to 2h
+                ratio: 1.4,
+                seven_day_ratio: 0.5,
+                critical_limit: LimitType::FiveHour,
+                reset_in: Duration::hours(3),
+                seven_day_reset_in: Some(Duration::hours(100)),
+                expect: &["2h", "5h"],
+            },
+            EtaCase {
+                // Warning zone: ETA = reset_in = 2h30m → format_eta rounds to 3h
+                ratio: 0.85,
+                seven_day_ratio: 0.0,
+                critical_limit: LimitType::FiveHour,
+                reset_in: Duration::hours(2) + Duration::minutes(30),
+                seven_day_reset_in: None,
+                expect: &["3h"],
+            },
+            EtaCase {
+                ratio: 1.4,
+                seven_day_ratio: 1.1,
+                critical_limit: LimitType::FiveHour,
+                reset_in: Duration::hours(3),
+                seven_day_reset_in: Some(Duration::hours(100)),
+                expect: &["5h", "7d"],
+            },
+        ];
 
-    #[test]
-    fn test_eta_only_warning_zone() {
-        let burn = BurnRate {
-            ratio: 0.85,
-            critical_limit: LimitType::FiveHour,
-            reset_in: Some(Duration::hours(2) + Duration::minutes(30)),
-            ..Default::default()
-        };
-        let result = verbose(&burn, PlanType::Subscription, false, true);
-        let stripped = strip_ansi_codes(&result);
-        // Warning zone: ETA = reset_in = 2h30m → format_eta rounds to 3h
-        assert!(
-            stripped.contains("3h"),
-            "expected '3h' (reset_in) in '{}'",
-            stripped
-        );
+        for case in cases {
+            let burn = BurnRate {
+                ratio: case.ratio,
+                seven_day_ratio: case.seven_day_ratio,
+                critical_limit: case.critical_limit,
+                reset_in: Some(case.reset_in),
+                seven_day_reset_in: case.seven_day_reset_in,
+                ..Default::default()
+            };
+            let result = rendered(&burn, PlanType::Subscription, false, true);
+            let stripped = strip_ansi_codes(&result);
+            for substr in case.expect {
+                assert!(
+                    stripped.contains(substr),
+                    "expected '{substr}' in '{stripped}'"
+                );
+            }
+            assert!(
+                !result.contains("🔥"),
+                "eta-only should not contain fire emoji"
+            );
+        }
     }
 
     #[test]
@@ -595,35 +595,11 @@ mod tests {
             &burn,
             PlanType::Subscription,
             BurnRateDisplay::EtaOnly,
-            &default_thresholds(),
+            &Thresholds::default(),
         );
         assert!(
             result.is_none(),
             "eta-only should return None when ratio < 0.8"
-        );
-    }
-
-    #[test]
-    fn test_eta_only_both_over_100() {
-        let burn = BurnRate {
-            ratio: 1.4,
-            seven_day_ratio: 1.1,
-            critical_limit: LimitType::FiveHour,
-            reset_in: Some(Duration::hours(3)),
-            seven_day_reset_in: Some(Duration::hours(100)),
-            ..Default::default()
-        };
-        let result = verbose(&burn, PlanType::Subscription, false, true);
-        let stripped = strip_ansi_codes(&result);
-        assert!(
-            stripped.contains("5h"),
-            "expected '5h' limit in '{}'",
-            stripped
-        );
-        assert!(
-            stripped.contains("7d"),
-            "expected '7d' secondary in '{}'",
-            stripped
         );
     }
 
@@ -654,11 +630,7 @@ mod tests {
         assert_eq!(format_eta(Duration::hours(23)), "23h");
     }
 
-    fn default_thresholds() -> Thresholds {
-        Thresholds::default()
-    }
-
-    fn verbose(
+    fn rendered(
         burn_rate: &BurnRate,
         plan_type: PlanType,
         show_rate: bool,
@@ -666,11 +638,8 @@ mod tests {
     ) -> String {
         let display = BurnRateDisplay::from_elements(show_rate, show_eta)
             .expect("invalid (false, false) combo in test");
-        let result =
-            format_burn_rate_component(burn_rate, plan_type, display, &default_thresholds())
-                .unwrap_or_default();
-        eprintln!("  {}", result);
-        result
+        format_burn_rate_component(burn_rate, plan_type, display, &Thresholds::default())
+            .unwrap_or_default()
     }
 
     fn strip_ansi_codes(s: &str) -> String {

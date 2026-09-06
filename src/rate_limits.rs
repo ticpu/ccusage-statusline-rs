@@ -298,21 +298,10 @@ mod tests {
         };
         assert!(supersedes(&higher, &lower));
         assert!(!supersedes(&lower, &higher));
-    }
 
-    #[test]
-    fn test_supersede_rule_equal_values() {
-        let reset_time = Utc::now() + Duration::from_secs(3600);
-        let a = StoredRateLimitWindow {
-            used_percentage: 50.0,
-            resets_at: reset_time,
-        };
-        let b = StoredRateLimitWindow {
-            used_percentage: 50.0,
-            resets_at: reset_time,
-        };
-        assert!(supersedes(&a, &b));
-        assert!(supersedes(&b, &a));
+        // Equal on both fields: either ordering supersedes the other, so a merge never
+        // stalls on a tie.
+        assert!(supersedes(&lower, &lower));
     }
 
     #[test]
