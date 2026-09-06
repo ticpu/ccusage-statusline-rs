@@ -306,19 +306,16 @@ impl TranscriptParser {
     }
 }
 
-/// Every deduplicated entry at or after `cutoff`, sorted by timestamp.
+/// Parse every transcript touched since `horizon` and return all cached entries for them.
 ///
 /// Transcripts are only ever extended, so each render parses the bytes appended since
-/// the last one and reuses what was already extracted.
-fn collect_entries(
+/// the last one and reuses what was already extracted. Entries come back in file order
+/// and may repeat across files.
+fn refresh_cache(
     claude_paths: &[PathBuf],
-    cutoff: DateTime<Utc>,
+    horizon: DateTime<Utc>,
     cache_dir: &Path,
 ) -> Result<Vec<CachedEntry>> {
-    // The cache is filled to the widest horizon any caller can ask for, so a narrow
-    // request never leaves it unable to answer a later wider one.
-    let widest = Utc::now() - Duration::hours(FILE_LOOKBACK_HOURS);
-    let horizon = cutoff.min(widest);
     let cutoff_rfc3339 = horizon.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
     let session_files = crate::timing::phase_counted("block.scan", || {
@@ -368,12 +365,16 @@ fn collect_entries(
     })?;
 
     crate::timing::note("block.read", read_bytes, collected.len());
+    Ok(collected)
+}
 
-    // Deduplication spans files, so it cannot happen while reading any single one.
+/// Entries at or after `cutoff_ms`, each dedup key kept once, sorted by timestamp.
+///
+/// Deduplication spans files, so it cannot happen while reading any single one.
+fn dedup_sorted(collected: &[CachedEntry], cutoff_ms: i64) -> Vec<CachedEntry> {
     let mut seen: HashSet<&str> = HashSet::with_capacity(collected.len());
-    let cutoff_ms = cutoff.timestamp_millis();
     let mut out: Vec<CachedEntry> = Vec::with_capacity(collected.len());
-    for entry in &collected {
+    for entry in collected {
         if entry.ts < cutoff_ms {
             continue;
         }
@@ -386,7 +387,21 @@ fn collect_entries(
     }
 
     out.sort_by_key(|e| e.ts);
-    Ok(out)
+    out
+}
+
+/// Every deduplicated entry at or after `cutoff`, sorted by timestamp.
+fn collect_entries(
+    claude_paths: &[PathBuf],
+    cutoff: DateTime<Utc>,
+    cache_dir: &Path,
+) -> Result<Vec<CachedEntry>> {
+    // The cache is filled to the widest horizon any caller can ask for, so a narrow
+    // request never leaves it unable to answer a later wider one.
+    let widest = Utc::now() - Duration::hours(FILE_LOOKBACK_HOURS);
+    let horizon = cutoff.min(widest);
+    let collected = refresh_cache(claude_paths, horizon, cache_dir)?;
+    Ok(dedup_sorted(&collected, cutoff.timestamp_millis()))
 }
 
 /// Find the most recent active billing block, if any.
