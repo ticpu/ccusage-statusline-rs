@@ -123,8 +123,9 @@ jobs:
           prerelease: false
           generate_release_notes: true
           append_body: true
+          # One paragraph per line: GitHub reflows the body, and a hard wrap here
+          # breaks mid-sentence on a phone.
           body: |
-            The Linux binaries are statically linked against musl, so they carry no
-            libc dependency and run on any glibc or musl distribution. The .deb
-            packages wrap those same binaries and install on any Debian or Ubuntu
-            release.
+            The Linux binaries are statically linked against musl, so they carry no libc dependency and run on any glibc or musl distribution. The .deb packages wrap those same binaries and install on any Debian or Ubuntu release.
+
+            Debian and Ubuntu users can track releases through the apt archive at https://apt.ticpu.net instead of downloading a .deb: install the keyring package there once and `apt-get upgrade` carries every later release.

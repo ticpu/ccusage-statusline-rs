@@ -13,9 +13,8 @@ and rate-limit windows.
 | cargo | `cargo install ccusage-statusline-rs` |
 | binstall | `cargo binstall ccusage-statusline-rs` |
 | Arch (AUR) | `paru -S ccusage-statusline-rs` or `ccusage-statusline-rs-bin` |
-| Homebrew | `brew install ticpu/tap/ccusage-statusline-rs` |
 | Nix | `nix run github:ticpu/ccusage-statusline-rs?dir=packaging/nix` |
-| Debian/Ubuntu | `.deb` for amd64 and arm64 on the [releases](https://github.com/ticpu/ccusage-statusline-rs/releases/latest) page |
+| Debian/Ubuntu | `apt-get install ccusage-statusline-rs` from [apt.ticpu.net](https://apt.ticpu.net), or the `.deb` for amd64 and arm64 on the [releases](https://github.com/ticpu/ccusage-statusline-rs/releases/latest) page |
 | Binary | download from [releases](https://github.com/ticpu/ccusage-statusline-rs/releases/latest) |
 | Source | `cargo build --release` |
 
@@ -36,6 +35,16 @@ another value.
 The Linux binaries are statically linked against musl, so one binary runs on any glibc or
 musl distribution with no libc dependency. The `.deb` packages wrap those same binaries and
 declare no library dependency, so one package installs on any Debian or Ubuntu release.
+
+Every release lands in the apt archive at [apt.ticpu.net](https://apt.ticpu.net), which
+serves the same signed `.deb` files the release page carries and upgrades them with
+`apt-get upgrade` like anything else. Add it once:
+
+```bash
+curl -fsSLO https://apt.ticpu.net/ticpu-archive-keyring.deb
+sudo dpkg -i ticpu-archive-keyring.deb
+sudo apt-get update
+```
 
 ## Multi-account isolation
 
