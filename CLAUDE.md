@@ -6,12 +6,12 @@ usage endpoint, renders one line. Design decisions live in `docs/design-rational
 ```
 src/
 ├── main.rs - Subcommands (install/uninstall/test/config), piped vs interactive mode, line assembly
-├── types.rs - Shared structs (HookData, ApiUsageData, ActiveBlock, BurnRate, pricing)
+├── types.rs - Shared structs (HookData, ApiUsageData, ActiveBlock, BurnRate)
 ├── paths.rs - claude_config_dir, find_claude_paths, iter_jsonl_files
 ├── config.rs - Element toggles, thresholds, cache TTLs, interactive menu
 ├── config_migration.rs - Versioned config schema, migrated on load
 ├── install.rs - statusLine entry in ~/.claude/settings.json
-├── pricing.rs - LiteLLM price table from GitHub (24h cache)
+├── pricing.rs - LiteLLM price table from GitHub (24h cache); per-token rates and cost
 ├── blocks.rs - 5-hour billing blocks; dedup by {messageId}:{requestId}
 ├── transcript_scan.rs - Suffix bisect and line parser feeding the block cache
 ├── burn_rate.rs - Burn rate from block cost and usage windows
