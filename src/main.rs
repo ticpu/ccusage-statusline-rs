@@ -24,7 +24,7 @@ use blocks::find_active_block;
 use burn_rate::calculate_burn_rate;
 use cache::{cleanup_stale_locks, get_cache_dir, try_get_cached, update_cache};
 use clap::{Parser, Subcommand};
-use config::StatusElement;
+use config::{ElementGroup, StatusElement};
 use context::calculate_context;
 use format::{
     BurnRateDisplay, format_api_metrics_group, format_block_info, format_burn_rate_component,
@@ -167,17 +167,7 @@ fn run_piped_mode() -> Result<()> {
 
 fn run_interactive_mode() -> Result<()> {
     let statusline_config = config::StatuslineConfig::load_or_default();
-    let hook_data = HookData {
-        session_id: String::new(),
-        transcript_path: String::new(),
-        model: types::ModelInfo {
-            id: None,
-            display_name: String::new(),
-        },
-        workspace: None,
-        context_window: None,
-        rate_limits: None,
-    };
+    let hook_data = HookData::placeholder("", None);
     let output = generate_statusline(&hook_data, &statusline_config)?;
     println!("{}", output);
     Ok(())
@@ -204,23 +194,18 @@ fn run_test_mode() -> Result<()> {
 
     eprintln!("Testing with: {}", transcript_path.display());
 
-    let hook_data = HookData {
-        session_id: "test-session".to_string(),
-        transcript_path: transcript_path
-            .to_string_lossy()
-            .to_string(),
-        model: types::ModelInfo {
-            id: None,
-            display_name: "Opus 5".to_string(),
-        },
-        workspace: Some(types::Workspace {
+    let mut hook_data = HookData::placeholder(
+        "Opus 5",
+        Some(types::Workspace {
             current_dir: std::env::current_dir()?
                 .to_string_lossy()
                 .to_string(),
         }),
-        context_window: None,
-        rate_limits: None,
-    };
+    );
+    hook_data.session_id = "test-session".to_string();
+    hook_data.transcript_path = transcript_path
+        .to_string_lossy()
+        .to_string();
 
     let statusline_config = config::StatuslineConfig::load_or_default();
     let output = generate_statusline(&hook_data, &statusline_config)?;
@@ -294,15 +279,60 @@ fn generate_statusline(
     let burn_rate = calculate_burn_rate(block.as_ref(), api_usage.as_ref(), thresholds);
     let context_info = timing::phase("context", || calculate_context(hook_data))?;
 
-    let mut parts = Vec::new();
-    let mut api_metrics_emitted = false;
-    let mut burn_rate_emitted = false;
-    let mut update_emitted = false;
+    let inputs = RenderInputs {
+        hook_data,
+        block,
+        burn_rate,
+        context_info,
+        api_usage,
+        api_error_label: api_result.error_label(),
+        plan_type,
+        update_available,
+    };
 
-    for element in &statusline_config.enabled_elements {
-        match element {
-            StatusElement::Model => {
-                let name = hook_data
+    let output = render_elements(&inputs, statusline_config).join(" │ ");
+    if statusline_config.show_emojis {
+        Ok(output)
+    } else {
+        Ok(strip_emojis(&output))
+    }
+}
+
+/// Everything a render reads, gathered before any element is formatted.
+struct RenderInputs<'a> {
+    hook_data: &'a HookData,
+    block: Option<types::ActiveBlock>,
+    burn_rate: types::BurnRate,
+    context_info: Option<types::ContextInfo>,
+    api_usage: Option<types::ApiUsageData>,
+    api_error_label: Option<&'static str>,
+    plan_type: types::PlanType,
+    update_available: Option<String>,
+}
+
+fn render_elements(
+    inputs: &RenderInputs,
+    statusline_config: &config::StatuslineConfig,
+) -> Vec<String> {
+    let thresholds = &statusline_config.thresholds;
+    let enabled = &statusline_config.enabled_elements;
+
+    let mut groups: Vec<ElementGroup> = Vec::new();
+    for group in enabled
+        .iter()
+        .map(StatusElement::group)
+    {
+        if !groups.contains(&group) {
+            groups.push(group);
+        }
+    }
+
+    let mut parts = Vec::new();
+    for group in groups {
+        match group {
+            ElementGroup::Model => {
+                let name = inputs
+                    .hook_data
                     .model
                     .display_name
                     .replace(" context)", ")");
@@ -310,77 +340,94 @@ fn generate_statusline(
                     parts.push(format!("🤖{}", name));
                 }
             }
-            StatusElement::BlockCost => {
-                parts.push(format!("💰{}", format_block_info(block.as_ref())));
+            ElementGroup::BlockCost => {
+                parts.push(format!(
+                    "💰{}",
+                    format_block_info(
+                        inputs
+                            .block
+                            .as_ref()
+                    )
+                ));
             }
-            StatusElement::TimeRemaining5h => {
-                if let Some(time) =
-                    format_time_remaining_5h(block.as_ref(), api_usage.as_ref(), plan_type)
+            ElementGroup::TimeRemaining5h => {
+                if let Some(time) = format_time_remaining_5h(
+                    inputs
+                        .block
+                        .as_ref(),
+                    inputs
+                        .api_usage
+                        .as_ref(),
+                    inputs.plan_type,
+                ) {
+                    parts.push(time);
+                }
+            }
+            ElementGroup::TimeRemaining7d => {
+                if let Some(time) = format_time_remaining_7d(
+                    inputs
+                        .api_usage
+                        .as_ref(),
+                    inputs.plan_type,
+                ) {
+                    parts.push(time);
+                }
+            }
+            ElementGroup::BurnRate => {
+                let has_rate = enabled.contains(&StatusElement::BurnRate);
+                let has_eta = enabled.contains(&StatusElement::BurnRateEta);
+                if let Some(s) =
+                    BurnRateDisplay::from_elements(has_rate, has_eta).and_then(|display| {
+                        format_burn_rate_component(
+                            &inputs.burn_rate,
+                            inputs.plan_type,
+                            display,
+                            thresholds,
+                        )
+                    })
                 {
-                    parts.push(time);
+                    parts.push(s);
                 }
             }
-            StatusElement::TimeRemaining7d => {
-                if let Some(time) = format_time_remaining_7d(api_usage.as_ref(), plan_type) {
-                    parts.push(time);
-                }
-            }
-            StatusElement::BurnRate | StatusElement::BurnRateEta => {
-                if !burn_rate_emitted {
-                    burn_rate_emitted = true;
-                    let enabled = &statusline_config.enabled_elements;
-                    let has_rate = enabled.contains(&StatusElement::BurnRate);
-                    let has_eta = enabled.contains(&StatusElement::BurnRateEta);
-                    if let Some(s) =
-                        BurnRateDisplay::from_elements(has_rate, has_eta).and_then(|display| {
-                            format_burn_rate_component(&burn_rate, plan_type, display, thresholds)
-                        })
-                    {
-                        parts.push(s);
-                    }
-                }
-            }
-            StatusElement::Context => {
-                if let Some(ctx) = context_info.as_ref() {
+            ElementGroup::Context => {
+                if let Some(ctx) = inputs
+                    .context_info
+                    .as_ref()
+                {
                     parts.push(format!("🧠{}", format_context(ctx, thresholds)));
                 }
             }
-            StatusElement::ApiMetrics5h
-            | StatusElement::ApiMetrics7d
-            | StatusElement::ApiMetricsModel7d => {
-                if !api_metrics_emitted {
-                    api_metrics_emitted = true;
-                    if let Some(s) = format_api_metrics_group(
-                        &statusline_config.enabled_elements,
-                        api_result.error_label(),
-                        api_usage.as_ref(),
-                    ) {
-                        parts.push(s);
-                    }
+            ElementGroup::ApiMetrics => {
+                if let Some(s) = format_api_metrics_group(
+                    enabled,
+                    inputs.api_error_label,
+                    inputs
+                        .api_usage
+                        .as_ref(),
+                ) {
+                    parts.push(s);
                 }
             }
-            StatusElement::UpdateStable | StatusElement::UpdateLatest => {
-                if !update_emitted {
-                    update_emitted = true;
-                    if let Some(ref new_version) = update_available {
-                        parts.push(format!("🔼{}", new_version));
-                    }
+            ElementGroup::Update => {
+                if let Some(new_version) = inputs
+                    .update_available
+                    .as_ref()
+                {
+                    parts.push(format!("🔼{}", new_version));
                 }
             }
-            StatusElement::Directory => {
-                if let Some(workspace) = &hook_data.workspace {
+            ElementGroup::Directory => {
+                if let Some(workspace) = &inputs
+                    .hook_data
+                    .workspace
+                {
                     parts.push(format_directory(&workspace.current_dir));
                 }
             }
         }
     }
 
-    let output = parts.join(" │ ");
-    if statusline_config.show_emojis {
-        Ok(output)
-    } else {
-        Ok(strip_emojis(&output))
-    }
+    parts
 }
 
 #[cfg(test)]

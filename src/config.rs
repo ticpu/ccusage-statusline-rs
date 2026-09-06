@@ -28,6 +28,21 @@ pub enum StatusElement {
     Directory,
 }
 
+/// Elements that render into one statusline part. The render loop emits a group once,
+/// where its first enabled element sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementGroup {
+    Model,
+    BlockCost,
+    TimeRemaining5h,
+    TimeRemaining7d,
+    BurnRate,
+    Context,
+    ApiMetrics,
+    Update,
+    Directory,
+}
+
 const API_DEPENDENT_ELEMENTS: &[StatusElement] = &[
     StatusElement::TimeRemaining5h,
     StatusElement::TimeRemaining7d,
@@ -39,6 +54,22 @@ const API_DEPENDENT_ELEMENTS: &[StatusElement] = &[
 ];
 
 impl StatusElement {
+    pub fn group(&self) -> ElementGroup {
+        match self {
+            Self::Model => ElementGroup::Model,
+            Self::BlockCost => ElementGroup::BlockCost,
+            Self::TimeRemaining5h => ElementGroup::TimeRemaining5h,
+            Self::TimeRemaining7d => ElementGroup::TimeRemaining7d,
+            Self::BurnRate | Self::BurnRateEta => ElementGroup::BurnRate,
+            Self::Context => ElementGroup::Context,
+            Self::ApiMetrics5h | Self::ApiMetrics7d | Self::ApiMetricsModel7d => {
+                ElementGroup::ApiMetrics
+            }
+            Self::UpdateStable | Self::UpdateLatest => ElementGroup::Update,
+            Self::Directory => ElementGroup::Directory,
+        }
+    }
+
     fn label(&self) -> &'static str {
         match self {
             Self::Model => "🤖 Model",

@@ -25,6 +25,23 @@ pub struct HookData {
     pub rate_limits: Option<RateLimits>,
 }
 
+impl HookData {
+    /// Stand-in for the modes that render without Claude Code on the other end of a pipe.
+    pub fn placeholder(display_name: &str, workspace: Option<Workspace>) -> Self {
+        Self {
+            session_id: String::new(),
+            transcript_path: String::new(),
+            model: ModelInfo {
+                id: None,
+                display_name: display_name.to_string(),
+            },
+            workspace,
+            context_window: None,
+            rate_limits: None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ModelInfo {
     #[serde(default)]
