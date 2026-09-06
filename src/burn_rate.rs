@@ -1,5 +1,5 @@
+use crate::config::Thresholds;
 use crate::types::{ActiveBlock, ApiUsageData, BurnRate, LimitType};
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 /// Spans of the API usage windows the endpoint reports. Not the billing block: a block
@@ -10,18 +10,18 @@ const SEVEN_DAY_WINDOW_HOURS: f64 = 168.0;
 pub fn calculate_burn_rate(
     block: Option<&ActiveBlock>,
     api_usage: Option<&ApiUsageData>,
-    burn_rate_show_ratio: f64,
-) -> Result<BurnRate> {
+    thresholds: &Thresholds,
+) -> BurnRate {
     let block = match block {
         Some(b) => b,
-        None => return Ok(BurnRate::default()),
+        None => return BurnRate::default(),
     };
 
     let now = Utc::now();
     let elapsed = (now - block.start_time).num_minutes() as f64;
 
     if elapsed <= 0.0 {
-        return Ok(BurnRate::default());
+        return BurnRate::default();
     }
 
     let cost_per_hour = (block.cost_usd / elapsed) * 60.0;
@@ -29,10 +29,10 @@ pub fn calculate_burn_rate(
     let api_usage = match api_usage {
         Some(api) => api,
         None => {
-            return Ok(BurnRate {
+            return BurnRate {
                 cost_per_hour,
                 ..Default::default()
-            });
+            };
         }
     };
 
@@ -58,9 +58,10 @@ pub fn calculate_burn_rate(
             calculate_limit_ratio(w.percent, w.resets_at, SEVEN_DAY_WINDOW_HOURS)
         });
 
-    let (critical_limit, ratio, reset_at) = if five_hour_ratio >= burn_rate_show_ratio {
+    let show_ratio = thresholds.burn_rate_show_ratio();
+    let (critical_limit, ratio, reset_at) = if five_hour_ratio >= show_ratio {
         (LimitType::FiveHour, five_hour_ratio, five_hour_resets_at)
-    } else if seven_day_ratio >= burn_rate_show_ratio {
+    } else if seven_day_ratio >= show_ratio {
         (LimitType::SevenDay, seven_day_ratio, seven_day_resets_at)
     } else if five_hour_ratio > 0.0 {
         (LimitType::FiveHour, five_hour_ratio, five_hour_resets_at)
@@ -81,7 +82,7 @@ pub fn calculate_burn_rate(
     let reset_in = reset_at.map(|reset| reset - now);
     let seven_day_reset_in = seven_day_resets_at.map(|reset| reset - now);
 
-    Ok(BurnRate {
+    BurnRate {
         cost_per_hour,
         ratio,
         seven_day_ratio,
@@ -89,7 +90,7 @@ pub fn calculate_burn_rate(
         is_at_limit,
         reset_in,
         seven_day_reset_in,
-    })
+    }
 }
 
 /// Below this much elapsed window, the rate is not yet meaningful.

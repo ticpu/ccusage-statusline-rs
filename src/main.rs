@@ -291,11 +291,7 @@ fn generate_statusline(
     let block = timing::phase("block", || {
         find_active_block(&claude_paths, &pricing, &cache_dir, five_hour_reset)
     })?;
-    let burn_rate = calculate_burn_rate(
-        block.as_ref(),
-        api_usage.as_ref(),
-        thresholds.burn_rate_show_ratio(),
-    )?;
+    let burn_rate = calculate_burn_rate(block.as_ref(), api_usage.as_ref(), thresholds);
     let context_info = timing::phase("context", || calculate_context(hook_data))?;
 
     let mut parts = Vec::new();
