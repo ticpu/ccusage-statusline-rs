@@ -58,46 +58,35 @@ fn is_cache_fresh(cache: &UpdateCache) -> bool {
         .unwrap_or(false)
 }
 
-fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
-    let client = crate::http::http_client()?;
+fn fetch_body(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    let response = crate::http::http_client()?
+        .get(url)
+        .send()
+        .with_context(|| format!("Failed to fetch {url}"))?;
 
+    if !response
+        .status()
+        .is_success()
+    {
+        anyhow::bail!("{url} returned status: {}", response.status());
+    }
+
+    crate::http::read_body_limited(response, max_bytes)
+}
+
+fn fetch_latest_version(channel: VersionChannel) -> Result<String> {
     match channel {
         VersionChannel::Stable => {
-            let response = client
-                .get(GCS_STABLE_URL)
-                .send()
-                .context("Failed to fetch GCS stable version")?;
-
-            if !response
-                .status()
-                .is_success()
-            {
-                anyhow::bail!("GCS returned status: {}", response.status());
-            }
-
-            let body = crate::http::read_body_limited(response, MAX_VERSION_BYTES)?;
+            let body = fetch_body(GCS_STABLE_URL, MAX_VERSION_BYTES)?;
             let version = String::from_utf8(body).context("Version response is not UTF-8")?;
             Ok(version
                 .trim()
                 .to_string())
         }
         VersionChannel::Latest => {
-            let response = client
-                .get(NPM_REGISTRY_URL)
-                .send()
-                .context("Failed to fetch npm registry")?;
-
-            if !response
-                .status()
-                .is_success()
-            {
-                anyhow::bail!("npm registry returned status: {}", response.status());
-            }
-
-            let body = crate::http::read_body_limited(response, MAX_REGISTRY_BYTES)?;
+            let body = fetch_body(NPM_REGISTRY_URL, MAX_REGISTRY_BYTES)?;
             let data: NpmRegistryResponse =
                 serde_json::from_slice(&body).context("Failed to parse npm registry response")?;
-
             Ok(data
                 .dist_tags
                 .latest)
@@ -147,44 +136,39 @@ pub fn check_update_available(env: &Env, config: &StatuslineConfig) -> Option<St
     let channel = get_version_channel(config)?;
     let current = claude_binary::get_version(env)?;
 
-    // Try to read cache first
-    if let Some(cache) = read_cache(env, channel)
-        && is_cache_fresh(&cache)
-    {
-        if let Some(ref latest) = cache.latest_version
-            && compare_versions(&current, latest)
-        {
-            return Some(latest.clone());
-        }
-        return None;
-    }
+    let cached = read_cache(env, channel);
+    let still_fresh = cached
+        .as_ref()
+        .filter(|cache| is_cache_fresh(cache))
+        .map(|cache| {
+            cache
+                .latest_version
+                .clone()
+        });
 
-    // Cache miss or stale - fetch new data
-    let latest_version = match fetch_latest_version(channel) {
-        Ok(version) => Some(version),
-        Err(e) => {
-            warn!("update check failed, using cached version: {:#}", e);
-            read_cache(env, channel).and_then(|c| c.latest_version)
+    let latest_version = match still_fresh {
+        Some(version) => version,
+        None => {
+            let fetched = match fetch_latest_version(channel) {
+                Ok(version) => Some(version),
+                Err(e) => {
+                    warn!("update check failed, using cached version: {:#}", e);
+                    cached.and_then(|c| c.latest_version)
+                }
+            };
+            // Written on failure too: without it every render retries the fetch.
+            let new_cache = UpdateCache {
+                latest_version: fetched.clone(),
+                checked_at: Utc::now(),
+            };
+            if let Err(e) = write_cache(env, channel, &new_cache) {
+                warn!("update cache write failed: {:#}", e);
+            }
+            fetched
         }
     };
 
-    // Update cache
-    let new_cache = UpdateCache {
-        latest_version: latest_version.clone(),
-        checked_at: Utc::now(),
-    };
-    if let Err(e) = write_cache(env, channel, &new_cache) {
-        warn!("update cache write failed: {:#}", e);
-    }
-
-    // Check if update available
-    if let Some(ref latest) = latest_version
-        && compare_versions(&current, latest)
-    {
-        return Some(latest.clone());
-    }
-
-    None
+    latest_version.filter(|latest| compare_versions(&current, latest))
 }
 
 #[cfg(test)]
