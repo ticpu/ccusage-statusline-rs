@@ -1,11 +1,11 @@
 use crate::entry_cache::CachedEntry;
 use crate::paths::iter_jsonl_files_since;
-use crate::pricing::PricingFetcher;
+use crate::pricing::{ModelPricing, PricingFetcher, TokenPrices, cost_at, estimate_prices};
 use crate::transcript_scan::TranscriptParser;
 use crate::types::ActiveBlock;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Timelike, Utc};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -80,16 +80,34 @@ fn group_into_blocks(entries: &[CachedEntry], pricing: &PricingFetcher) -> Vec<B
     blocks
 }
 
+/// Rates for one model id, settled once for a whole render.
+enum Resolved<'a> {
+    Table(&'a ModelPricing),
+    Estimate(TokenPrices),
+}
+
 /// Total cost of a set of entries at current prices.
+///
+/// A model id absent from the table costs a scan of every key to establish, and an
+/// estimated one warns, so both happen once per distinct id rather than once per entry.
 fn cost_of(entries: &[&CachedEntry], pricing: &PricingFetcher) -> f64 {
+    let mut resolved: HashMap<Option<&str>, Resolved> = HashMap::new();
     entries
         .iter()
         .map(|e| {
-            pricing.calculate_cost_for(
-                e.model
-                    .as_deref(),
-                &e.usage,
-            )
+            let model = e
+                .model
+                .as_deref();
+            let rates = resolved
+                .entry(model)
+                .or_insert_with(|| match model.and_then(|m| pricing.resolve(m)) {
+                    Some(p) => Resolved::Table(p),
+                    None => Resolved::Estimate(estimate_prices(model)),
+                });
+            match rates {
+                Resolved::Table(p) => p.calculate_cost(&e.usage),
+                Resolved::Estimate(t) => cost_at(t, &e.usage),
+            }
         })
         .sum()
 }

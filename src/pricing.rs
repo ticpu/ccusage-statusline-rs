@@ -120,7 +120,7 @@ impl ModelPricing {
     }
 }
 
-fn cost_at(prices: &TokenPrices, usage: &UsageTokens) -> f64 {
+pub(crate) fn cost_at(prices: &TokenPrices, usage: &UsageTokens) -> f64 {
     let cache_write_cost = match &usage.cache_creation {
         Some(b) if b.ephemeral_5m_input_tokens + b.ephemeral_1h_input_tokens > 0 => {
             b.ephemeral_5m_input_tokens as f64 * prices.cache_write
@@ -205,8 +205,11 @@ impl PricingFetcher {
         }
     }
 
-    /// Get pricing for a specific model
-    fn get_model_pricing(&self, model_name: &str) -> Option<&ModelPricing> {
+    /// Table entry for a model id, if the table lists it.
+    ///
+    /// The last resort scans every key, so callers price a whole render's entries
+    /// through one resolution per model id rather than one per entry.
+    pub(crate) fn resolve(&self, model_name: &str) -> Option<&ModelPricing> {
         // Try exact match first
         if let Some(pricing) = self
             .models
@@ -228,25 +231,13 @@ impl PricingFetcher {
         }
 
         // Try case-insensitive match
-        let model_lower = model_name.to_lowercase();
         for (key, pricing) in &self.models {
-            if key.to_lowercase() == model_lower {
+            if key.eq_ignore_ascii_case(model_name) {
                 return Some(pricing);
             }
         }
 
         None
-    }
-
-    /// Cost from model id and token counts alone, so cached entries need not
-    /// reconstruct a whole transcript record to be re-priced.
-    pub fn calculate_cost_for(&self, model: Option<&str>, usage: &UsageTokens) -> f64 {
-        if let Some(name) = model
-            && let Some(pricing) = self.get_model_pricing(name)
-        {
-            return pricing.calculate_cost(usage);
-        }
-        estimate_cost_fallback(model, usage)
     }
 }
 
@@ -268,10 +259,10 @@ fn prices_from(input: f64, output: f64) -> TokenPrices {
     }
 }
 
-/// Fallback cost estimation for a model LiteLLM does not list. Current models carry no
-/// above-threshold tier, so base and tiered prices are the same.
-fn estimate_cost_fallback(model: Option<&str>, usage: &UsageTokens) -> f64 {
-    let prices = match model {
+/// Estimated rates for a model LiteLLM does not list. Current models carry no
+/// above-threshold tier, so one set of prices covers every prompt size.
+pub(crate) fn estimate_prices(model: Option<&str>) -> TokenPrices {
+    match model {
         Some(m) if m.contains("opus") => prices_from(5e-6, 25e-6),
         Some(m) if m.contains("haiku") => prices_from(1e-6, 5e-6),
         Some(m) if m.contains("sonnet") => prices_from(3e-6, 15e-6),
@@ -282,9 +273,7 @@ fn estimate_cost_fallback(model: Option<&str>, usage: &UsageTokens) -> f64 {
             );
             prices_from(3e-6, 15e-6)
         }
-    };
-
-    cost_at(&prices, usage)
+    }
 }
 
 #[cfg(test)]
