@@ -439,23 +439,144 @@ fn render_elements(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Duration, Utc};
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    /// Past blocks.rs's bisect threshold, so the cold render seeks instead of reading
+    /// the transcript whole.
+    const LONG_TRANSCRIPT_BYTES: usize = 300 * 1024;
+
+    fn usage_line(ts: DateTime<Utc>, id: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{}","requestId":"r{id}","message":{{"id":"m{id}","model":"claude-opus-5","usage":{{"input_tokens":900,"output_tokens":120,"cache_creation_input_tokens":400,"cache_read_input_tokens":18000}}}}}}"#,
+            ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        )
+    }
+
+    /// A tool result: no usage, and far longer than the entries that carry one, which is
+    /// the ratio the parse is tuned for.
+    fn filler_line(ts: DateTime<Utc>, id: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{}","type":"tool_result","content":"{}"}}"#,
+            ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "x".repeat(400 + id.len())
+        )
+    }
+
+    /// A transcript of at least `min_bytes`, every entry inside the 12-hour lookback.
+    fn write_transcript(path: &Path, min_bytes: usize, now: DateTime<Utc>) {
+        std::fs::create_dir_all(
+            path.parent()
+                .unwrap(),
+        )
+        .unwrap();
+        let mut file = std::fs::File::create(path).unwrap();
+        let mut written = 0usize;
+        let mut i = 0u32;
+        while written < min_bytes {
+            let ts = now - Duration::minutes(i64::from(600 - i.min(590)));
+            let line = if i.is_multiple_of(30) {
+                usage_line(ts, &format!("{}-{i}", path.display()))
+            } else {
+                filler_line(ts, &i.to_string())
+            };
+            writeln!(file, "{}", line).unwrap();
+            written += line.len() + 1;
+            i += 1;
+        }
+    }
+
+    /// A price table naming the fixture's model, fresh enough that no fetch is attempted.
+    fn seed_pricing(env: &Env) {
+        let table = serde_json::json!({
+            "timestamp": Utc::now().timestamp(),
+            "models": {
+                "claude-opus-5": {
+                    "input_cost_per_token": 5e-6,
+                    "output_cost_per_token": 25e-6,
+                    "cache_creation_input_token_cost": 6.25e-6,
+                    "cache_read_input_token_cost": 5e-7,
+                }
+            }
+        });
+        cache::write_json_atomic(&env.cache_file("pricing.json"), &table).unwrap();
+    }
+
+    /// Sessions across two projects, one with a sub-agent transcript beneath it.
+    /// Returns the long transcript, which is also the one the hook data points at.
+    fn build_projects(env: &Env) -> PathBuf {
+        let projects = &env.claude_paths[0];
+        let now = Utc::now();
+
+        let long = projects.join("project-a/session-1.jsonl");
+        write_transcript(&long, LONG_TRANSCRIPT_BYTES, now);
+        write_transcript(
+            &projects.join("project-a/session-1/subagents/agent-1.jsonl"),
+            8 * 1024,
+            now,
+        );
+        write_transcript(&projects.join("project-b/session-2.jsonl"), 16 * 1024, now);
+
+        long
+    }
+
+    fn fixture_config() -> config::StatuslineConfig {
+        config::StatuslineConfig {
+            enabled_elements: vec![
+                StatusElement::Model,
+                StatusElement::BlockCost,
+                StatusElement::Context,
+                StatusElement::Directory,
+            ],
+            ..config::StatuslineConfig::default()
+        }
+    }
 
     #[test]
     fn test_performance_under_20ms() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let _ = run_interactive_mode();
+        let root = paths::test_scratch_dir("perf");
+        let env = Env::under(&root).unwrap();
+        seed_pricing(&env);
+        let transcript = build_projects(&env);
+
+        let mut hook_data = HookData::placeholder(
+            "Opus 5",
+            Some(types::Workspace {
+                current_dir: root
+                    .to_string_lossy()
+                    .to_string(),
+            }),
+        );
+        hook_data.transcript_path = transcript
+            .to_string_lossy()
+            .to_string();
+        let statusline_config = fixture_config();
+
+        generate_statusline(&env, &hook_data, &statusline_config).expect("cold render");
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        writeln!(file, "{}", usage_line(Utc::now(), "appended")).unwrap();
+        drop(file);
+
+        generate_statusline(&env, &hook_data, &statusline_config).expect("render after append");
 
         let iterations = 10;
         let mut total_duration = std::time::Duration::ZERO;
-
         for _ in 0..iterations {
             let start = std::time::Instant::now();
-            let _ = run_interactive_mode();
+            generate_statusline(&env, &hook_data, &statusline_config).expect("timed render");
             total_duration += start.elapsed();
         }
 
         let avg_ms = total_duration.as_millis() / iterations as u128;
-        eprintln!("Average execution time: {}ms (cached)", avg_ms);
+        eprintln!(
+            "Average execution time: {}us",
+            total_duration.as_micros() / iterations as u128
+        );
         let threshold = if cfg!(debug_assertions) { 100 } else { 20 };
         assert!(
             avg_ms <= threshold,
@@ -463,5 +584,7 @@ mod tests {
             avg_ms,
             threshold
         );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
