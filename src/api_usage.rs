@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{ErrorKind, IsTerminal, Read};
+use std::fs::{self, File, TryLockError};
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -200,25 +200,10 @@ fn fetch_usage_with_lock(
     cache_path: &Path,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
-    // Materialize the cache file first so every caller reaches the lock below. Taking
-    // the cold-start fetch unlocked let N concurrent statuslines each call the API,
-    // which is the surest way to earn the 429 the backoff logic exists to handle.
-    if let Err(e) = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(cache_path)
-        && e.kind() != ErrorKind::AlreadyExists
-    {
-        return Err(e)
-            .with_context(|| format!("Failed to create API cache {}", cache_path.display()));
-    }
-
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(cache_path)
-        .with_context(|| format!("Failed to open API cache {}", cache_path.display()))?;
+    // Creating the file here is what lets every caller reach the lock below. Taking the
+    // cold-start fetch unlocked let N concurrent statuslines each call the API, which is
+    // the surest way to earn the 429 the backoff logic exists to handle.
+    let mut file = crate::cache::open_private_rw(cache_path)?;
 
     match file.try_lock() {
         Ok(()) => {
@@ -494,6 +479,7 @@ fn fetch_api_response() -> Result<ApiResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::OpenOptions;
     use std::sync::Arc;
     use std::thread;
 
