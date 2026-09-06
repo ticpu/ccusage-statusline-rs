@@ -7,7 +7,7 @@ use inquire::{CustomType, MultiSelect, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
-use std::io::{IsTerminal, Write};
+use std::io::{ErrorKind, IsTerminal, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -325,60 +325,62 @@ impl StatuslineConfig {
         Ok((config, migrated))
     }
 
-    pub fn load(env: &Env) -> Result<Self> {
+    /// Read, migrate and clamp the config file; `None` when there is none yet.
+    ///
+    /// Clamping belongs here rather than in one caller: the menu would otherwise show and
+    /// write back the out-of-range values every render silently clamps.
+    fn read_document(env: &Env) -> Result<Option<(Self, bool)>> {
         let path = Self::config_path(env);
 
-        if !path.exists() {
-            return Ok(Self::default());
-        }
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to read {}", path.display()));
+            }
+        };
 
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        match Self::parse_migrated(&content) {
-            Ok((mut config, migrated)) => {
-                config
-                    .thresholds
-                    .clamp_reporting();
+        let (mut config, migrated) = Self::parse_migrated(&content)?;
+        config
+            .thresholds
+            .clamp_reporting();
+        Ok(Some((config, migrated)))
+    }
+
+    /// An unusable config falls back to defaults loudly: silently reverting the whole
+    /// statusline leaves the user no way to discover the problem.
+    pub fn load_or_default(env: &Env) -> Self {
+        match Self::read_document(env) {
+            Ok(None) => Self::default(),
+            Ok(Some((config, migrated))) => {
                 // A failed write leaves the file at its old schema; the migration is
                 // recomputed on every load, so the only cost is doing it again.
                 if migrated && let Err(e) = config.save(env) {
                     warn!("config: migrated settings could not be saved: {:#}", e);
                 }
-                Ok(config)
+                config
             }
             Err(e) => {
-                warn!("Config parse error ({}): {:#}", path.display(), e);
-                Ok(Self::default())
-            }
-        }
-    }
-
-    /// `load()` with the fallback to defaults reported rather than silent: an
-    /// unreadable config otherwise reverts the whole statusline with no message.
-    pub fn load_or_default(env: &Env) -> Self {
-        match Self::load(env) {
-            Ok(config) => config,
-            Err(e) => {
-                warn!("Config load failed, using defaults: {:#}", e);
+                warn!(
+                    "Config unusable ({}), using defaults: {:#}",
+                    Self::config_path(env).display(),
+                    e
+                );
                 Self::default()
             }
         }
     }
 
-    /// Like `load()` but propagates parse errors; used in interactive menu where
-    /// proceeding with defaults on a corrupt config would silently overwrite it.
+    /// Propagates instead of falling back; used in the interactive menu, where saving
+    /// defaults over a config that merely failed to parse would destroy it.
     fn load_strict(env: &Env) -> Result<Self> {
-        let path = Self::config_path(env);
-
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        Self::parse_migrated(&content)
-            .map(|(config, _)| config)
-            .with_context(|| format!("{} is unusable; fix or delete it", path.display()))
+        let document = Self::read_document(env).with_context(|| {
+            format!(
+                "{} is unusable; fix or delete it",
+                Self::config_path(env).display()
+            )
+        })?;
+        Ok(document.map_or_else(Self::default, |(config, _)| config))
     }
 
     pub fn save(&self, env: &Env) -> Result<()> {
