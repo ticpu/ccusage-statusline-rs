@@ -2,6 +2,7 @@ use crate::types::UsageTokens;
 use crate::warn;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -29,23 +30,26 @@ pub struct EntryCache {
     files: HashMap<String, CachedFile>,
 }
 
+/// How a transcript path indexes the cache. Borrowed for lookups, owned only to insert.
+fn key(path: &Path) -> Cow<'_, str> {
+    path.to_string_lossy()
+}
+
 impl EntryCache {
-    /// Where a resumed parse of `path` must start, and whether prior entries survive.
+    /// Byte offset a resumed parse of `path` must start from.
     ///
     /// A transcript shorter than what was already consumed cannot be the same file
     /// extended, so its entries are dropped and it is read from the beginning.
     pub fn resume_at(&mut self, path: &Path, current_len: u64) -> u64 {
-        let key = path
-            .to_string_lossy()
-            .into_owned();
+        let key = key(path);
         match self
             .files
-            .get(&key)
+            .get(key.as_ref())
         {
             Some(f) if f.consumed <= current_len => f.consumed,
             Some(_) => {
                 self.files
-                    .remove(&key);
+                    .remove(key.as_ref());
                 0
             }
             None => 0,
@@ -53,12 +57,9 @@ impl EntryCache {
     }
 
     pub fn record(&mut self, path: &Path, consumed: u64, mut new_entries: Vec<CachedEntry>) {
-        let key = path
-            .to_string_lossy()
-            .into_owned();
         let slot = self
             .files
-            .entry(key)
+            .entry(key(path).into_owned())
             .or_default();
         slot.consumed = consumed;
         slot.entries
@@ -67,10 +68,7 @@ impl EntryCache {
 
     pub fn entries_for(&self, path: &Path) -> &[CachedEntry] {
         self.files
-            .get(
-                path.to_string_lossy()
-                    .as_ref(),
-            )
+            .get(key(path).as_ref())
             .map(|f| {
                 f.entries
                     .as_slice()
