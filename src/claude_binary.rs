@@ -75,9 +75,12 @@ fn fetch_claude_version() -> Option<String> {
     let status = match child.wait_timeout(VERSION_TIMEOUT) {
         Ok(Some(status)) => status,
         Ok(None) => {
-            let _ = child.kill();
-            let _ = child.wait();
             warn!("claude --version timed out, skipping update check");
+            if let Err(e) = child.kill() {
+                warn!("claude --version could not be killed, leaving it running: {e}");
+            } else if let Err(e) = child.wait() {
+                warn!("claude --version killed but not reaped: {e}");
+            }
             return None;
         }
         Err(e) => {
