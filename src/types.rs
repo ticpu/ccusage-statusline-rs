@@ -425,6 +425,19 @@ mod tests {
         assert!((sonnet_4_5().calculate_cost(&u) - 10_000.0 * 3.75e-6).abs() < 1e-9);
     }
 
+    /// Above the threshold the long-TTL write rate rises with the tier like every other
+    /// category; leaving it at its base value under-charges the largest requests.
+    #[test]
+    fn test_tiered_long_ttl_write_scales_with_tier() {
+        let mut u = usage(0, 0, 10_000, 400_000);
+        u.cache_creation = Some(CacheCreationBreakdown {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 10_000,
+        });
+        let expected = 10_000.0 * 12e-6 + 400_000.0 * 6e-7;
+        assert!((sonnet_4_5().calculate_cost(&u) - expected).abs() < 1e-9);
+    }
+
     #[test]
     fn test_implausible_published_1h_rate_is_replaced() {
         // Retired models publish a 1h rate unrelated to their own base input price.
