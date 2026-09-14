@@ -10,6 +10,8 @@ RUST_ARCH = $(if $(filter arm64,$(DEB_ARCH)),aarch64,x86_64)
 BINARY = dist/$(PKGNAME)-linux-$(RUST_ARCH)
 DEB = $(PKGNAME)_$(DEB_VERSION)_$(DEB_ARCH).deb
 STAGE = target/package.tmp
+MAKEPKG_DIR = target/makepkg
+MAKEPKG_STAMP = $(MAKEPKG_DIR)/built.stamp
 
 .PHONY: all tarball package install clean screenshot deb deb-all
 
@@ -26,15 +28,24 @@ tarball:
 	@rm -f $(PKGNAME)-$(VERSION).tar
 	@echo "Created $(TARBALL)"
 
-package: tarball
-	@echo "Preparing PKGBUILD for local build..."
-	@cp PKGBUILD PKGBUILD.bak
-	@sed -i 's|source=("https://github.com/ticpu/$$pkgname/releases/download/v$$pkgver/$$pkgname-$$pkgver.tar.xz")|source=("$$pkgname-$$pkgver.tar.xz")|' PKGBUILD
-	makepkg -si --noconfirm
-	@mv PKGBUILD.bak PKGBUILD
+package: $(MAKEPKG_STAMP)
 
-install:
-	makepkg -si --noconfirm
+# The tracked PKGBUILD fetches the published release; this builds HEAD, so HEAD's
+# reflog is the source prerequisite. A fresh directory keeps makepkg from reusing
+# a same-version package or extracted tree.
+$(MAKEPKG_STAMP): PKGBUILD $(shell git rev-parse --git-path logs/HEAD)
+	$(MAKE) tarball
+	rm -rf $(MAKEPKG_DIR)
+	mkdir -p $(MAKEPKG_DIR)
+	mv $(TARBALL) $(MAKEPKG_DIR)/
+	sed -e 's|^pkgver=.*|pkgver=$(VERSION)|' \
+		-e 's|^source=.*|source=("$$pkgname-$$pkgver.tar.xz")|' \
+		PKGBUILD > $(MAKEPKG_DIR)/PKGBUILD
+	makepkg -D $(MAKEPKG_DIR) -s --noconfirm
+	touch $@
+
+install: $(MAKEPKG_STAMP)
+	makepkg -D $(MAKEPKG_DIR) -i --noconfirm
 
 # Same command the release workflow runs, so a .deb built here comes off the
 # binary that ships. One pass emits every architecture, and in CI the files
@@ -98,8 +109,6 @@ screenshot:
 clean:
 	rm -f $(TARBALL)
 	rm -rf $(PKGNAME)-$(VERSION)/
-	rm -rf pkg/
-	rm -f *.pkg.tar.zst
-	rm -f PKGBUILD.bak
+	rm -rf $(MAKEPKG_DIR)
 	rm -rf dist/
 	rm -f $(PKGNAME)_*.deb

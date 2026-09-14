@@ -8,6 +8,7 @@ url="https://github.com/ticpu/ccusage-statusline-rs"
 license=('MIT')
 depends=('gcc-libs')
 makedepends=('cargo')
+checkdepends=('git')
 options=('!lto')
 source=("https://github.com/ticpu/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz")
 sha256sums=('SKIP')
