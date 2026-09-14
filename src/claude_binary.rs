@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
-use wait_timeout::ChildExt;
 
 use crate::paths::Env;
+use crate::process::{RunError, run_bounded};
 use crate::warn;
 
 const VERSION_CACHE_FILE: &str = "claude-version-cache.json";
@@ -55,52 +54,33 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Fetch version from `claude --version`
 fn fetch_claude_version() -> Option<String> {
-    let mut child = match Command::new("claude")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            // Not installed is the ordinary case and says nothing worth reporting.
-            if e.kind() != std::io::ErrorKind::NotFound {
-                warn!("claude --version could not start: {e}");
-            }
+    let output = match run_bounded(Command::new("claude").arg("--version"), VERSION_TIMEOUT) {
+        Ok(output) => output,
+        // Not installed is the ordinary case and says nothing worth reporting.
+        Err(RunError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(RunError::Spawn(e)) => {
+            warn!("claude --version could not start: {e}");
             return None;
         }
-    };
-
-    let status = match child.wait_timeout(VERSION_TIMEOUT) {
-        Ok(Some(status)) => status,
-        Ok(None) => {
+        Err(RunError::TimedOut) => {
             warn!("claude --version timed out, skipping update check");
-            if let Err(e) = child.kill() {
-                warn!("claude --version could not be killed, leaving it running: {e}");
-            } else if let Err(e) = child.wait() {
-                warn!("claude --version killed but not reaped: {e}");
-            }
             return None;
         }
-        Err(e) => {
+        Err(RunError::Wait(e)) => {
             warn!("claude --version failed: {e}");
             return None;
         }
     };
 
-    if !status.success() {
+    if !output
+        .status
+        .success()
+    {
         return None;
     }
 
-    let mut stdout = child
-        .stdout
-        .take()?;
-    let mut buf = String::new();
-    stdout
-        .read_to_string(&mut buf)
-        .ok()?;
-    buf.split_whitespace()
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
         .next()
         .map(String::from)
 }

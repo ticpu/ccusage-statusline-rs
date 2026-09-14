@@ -14,6 +14,7 @@ mod http;
 mod install;
 mod paths;
 mod pricing;
+mod process;
 mod rate_limits;
 #[cfg(test)]
 mod testutil;

@@ -23,6 +23,7 @@ src/
 ├── rate_limits.rs - Merges statusline-stdin rate limits with the endpoint's windows
 ├── claude_binary.rs - Claude Code binary detection, User-Agent
 ├── claude_update.rs - Update check (stable/latest channels)
+├── process.rs - Subprocess run with timeout, kill and reap
 ├── http.rs - Shared client, size-limited body reads
 ├── format.rs - Rendering: emojis, colors, threshold coloring
 ├── format/burn_rate.rs - Burn-rate and ETA rendering
