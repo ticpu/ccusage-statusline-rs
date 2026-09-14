@@ -3,11 +3,11 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 /// Schema version this binary writes. Bump with every entry added to MIGRATIONS.
-pub const CURRENT_VERSION: u64 = 1;
+pub const CURRENT_VERSION: u64 = 2;
 
 /// Entry at index N migrates a document from version N to N+1. Never reorder or drop
 /// one: a config file may sit at any version.
-const MIGRATIONS: &[fn(&mut Value)] = &[sonnet_element_to_model_scoped];
+const MIGRATIONS: &[fn(&mut Value)] = &[sonnet_element_to_model_scoped, git_branch_added];
 
 /// Brings a raw config document up to CURRENT_VERSION. True when it changed and the
 /// caller should persist it.
@@ -62,6 +62,9 @@ fn sonnet_element_to_model_scoped(doc: &mut Value) {
     });
 }
 
+/// v1 -> v2: git_branch element added, off by default; nothing to rewrite.
+fn git_branch_added(_: &mut Value) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +101,16 @@ mod tests {
         .unwrap();
         assert!(migrate(&mut doc));
         assert_eq!(elements(&doc), ["api_metrics_model7d"]);
+    }
+
+    #[test]
+    fn test_v1_keeps_elements() {
+        let mut doc: Value =
+            serde_json::from_str(r#"{"version": 1, "enabled_elements": ["model", "directory"]}"#)
+                .unwrap();
+        assert!(migrate(&mut doc));
+        assert_eq!(elements(&doc), ["model", "directory"]);
+        assert_eq!(doc["version"], Value::from(CURRENT_VERSION));
     }
 
     #[test]

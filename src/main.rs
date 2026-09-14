@@ -10,6 +10,7 @@ mod context;
 mod diag;
 mod entry_cache;
 mod format;
+mod git;
 mod http;
 mod install;
 mod paths;
@@ -31,13 +32,14 @@ use config::{ElementGroup, StatusElement};
 use context::calculate_context;
 use format::burn_rate::{BurnRateDisplay, format_burn_rate_component};
 use format::{
-    format_api_metrics_group, format_block_info, format_context, format_directory,
+    format_api_metrics_group, format_block_info, format_context, format_directory_group,
     format_time_remaining_5h, format_time_remaining_7d, strip_emojis,
 };
 use paths::{Env, iter_jsonl_files};
 use pricing::PricingFetcher;
 use std::fs;
 use std::io::{self, ErrorKind, IsTerminal, Read};
+use std::path::Path;
 use types::HookData;
 
 // musl's mallocng is markedly slower than glibc's malloc on the transcript parse.
@@ -287,9 +289,23 @@ fn generate_statusline(
     })?;
     let burn_rate = calculate_burn_rate(block.as_ref(), api_usage.as_ref(), thresholds);
     let context_info = timing::phase("context", || calculate_context(env, hook_data))?;
+    let git_branch = hook_data
+        .workspace
+        .as_ref()
+        .filter(|_| {
+            statusline_config
+                .enabled_elements
+                .contains(&StatusElement::GitBranch)
+        })
+        .and_then(|workspace| {
+            timing::phase("git", || {
+                git::current_branch(Path::new(&workspace.current_dir))
+            })
+        });
 
     let inputs = RenderInputs {
         hook_data,
+        git_branch,
         block,
         burn_rate,
         context_info,
@@ -310,6 +326,7 @@ fn generate_statusline(
 /// Everything a render reads, gathered before any element is formatted.
 struct RenderInputs<'a> {
     hook_data: &'a HookData,
+    git_branch: Option<String>,
     block: Option<types::ActiveBlock>,
     burn_rate: types::BurnRate,
     context_info: Option<types::ContextInfo>,
@@ -426,11 +443,23 @@ fn render_elements(
                 }
             }
             ElementGroup::Directory => {
-                if let Some(workspace) = &inputs
+                let dir = inputs
                     .hook_data
                     .workspace
-                {
-                    parts.push(format_directory(&workspace.current_dir));
+                    .as_ref()
+                    .filter(|_| enabled.contains(&StatusElement::Directory))
+                    .map(|workspace| {
+                        workspace
+                            .current_dir
+                            .as_str()
+                    });
+                if let Some(s) = format_directory_group(
+                    dir,
+                    inputs
+                        .git_branch
+                        .as_deref(),
+                ) {
+                    parts.push(s);
                 }
             }
         }

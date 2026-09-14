@@ -26,6 +26,7 @@ pub enum StatusElement {
     UpdateStable,
     UpdateLatest,
     Directory,
+    GitBranch,
 }
 
 /// Elements that render into one statusline part. The render loop emits a group once,
@@ -66,7 +67,7 @@ impl StatusElement {
                 ElementGroup::ApiMetrics
             }
             Self::UpdateStable | Self::UpdateLatest => ElementGroup::Update,
-            Self::Directory => ElementGroup::Directory,
+            Self::Directory | Self::GitBranch => ElementGroup::Directory,
         }
     }
 
@@ -85,6 +86,7 @@ impl StatusElement {
             Self::UpdateStable => "🔼 Update (stable)",
             Self::UpdateLatest => "🔼 Update (latest)",
             Self::Directory => "📁 Directory",
+            Self::GitBranch => "🌿 Git branch",
         }
     }
 
@@ -113,6 +115,7 @@ impl StatusElement {
                 "Notification when a new latest-channel Claude Code version is available."
             }
             Self::Directory => "Current working directory path.",
+            Self::GitBranch => "Git branch of the working directory, shown after its path.",
         }
     }
 
@@ -131,6 +134,7 @@ impl StatusElement {
             Self::UpdateStable,
             Self::UpdateLatest,
             Self::Directory,
+            Self::GitBranch,
         ]
     }
 }

@@ -279,7 +279,21 @@ pub fn strip_emojis(s: &str) -> String {
 }
 
 /// Format directory path with home replacement and color
-pub fn format_directory(path: &str) -> String {
+/// Directory and its branch render as one part; either may be absent.
+pub fn format_directory_group(dir: Option<&str>, branch: Option<&str>) -> Option<String> {
+    let parts: Vec<String> = dir
+        .map(format_directory)
+        .into_iter()
+        .chain(branch.map(|b| {
+            format!("#{b}")
+                .magenta()
+                .to_string()
+        }))
+        .collect();
+    (!parts.is_empty()).then(|| parts.concat())
+}
+
+fn format_directory(path: &str) -> String {
     let home = crate::paths::home_dir()
         .ok()
         .and_then(|p| {
@@ -300,6 +314,23 @@ pub fn format_directory(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_directory_group_halves() {
+        assert_eq!(format_directory_group(None, None), None);
+
+        let branch_only = format_directory_group(None, Some("dev")).unwrap();
+        assert!(branch_only.contains("#dev"), "got {branch_only}");
+
+        let both = format_directory_group(Some("/srv/x"), Some("dev")).unwrap();
+        let dir_at = both
+            .find("/srv/x")
+            .unwrap();
+        let branch_at = both
+            .find("#dev")
+            .unwrap();
+        assert!(dir_at < branch_at, "got {both}");
+    }
 
     #[test]
     fn test_format_hours_remaining_carries_rounded_minutes() {
