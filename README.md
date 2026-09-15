@@ -83,7 +83,9 @@ ccusage-statusline-rs config
 
 An interactive menu toggles individual elements, picks the update-notification channel
 (stable/latest/off), and sets burn-rate and context color thresholds. Settings live in
-`ccusage-statusline-config.json` inside the config directory.
+`ccusage-statusline-config.json` inside the config directory. In each submenu Enter
+applies and Esc discards; nothing is written until Save & exit, and leaving with
+unsaved changes asks whether to save them.
 
 Cache timing is edited in that file directly:
 

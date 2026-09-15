@@ -3,7 +3,7 @@ use crate::paths::Env;
 use crate::warn;
 use anyhow::{Context as _, Result};
 use inquire::ui::{RenderConfig, Styled};
-use inquire::{CustomType, MultiSelect, Select};
+use inquire::{Confirm, CustomType, MultiSelect, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -139,7 +139,7 @@ impl StatusElement {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Thresholds {
     #[serde(default = "default_burn_rate_show")]
     pub burn_rate_show: u32,
@@ -215,7 +215,7 @@ impl Thresholds {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CacheSettings {
     #[serde(default = "default_output_cache_secs")]
     pub output_cache_secs: u64,
@@ -270,7 +270,7 @@ where
     Ok(out)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatuslineConfig {
     #[serde(default)]
     pub version: u64,
@@ -404,6 +404,7 @@ enum MainMenu {
     Thresholds,
     Help,
     SaveAndExit,
+    ExitWithoutSaving,
 }
 
 impl fmt::Display for MainMenu {
@@ -418,6 +419,7 @@ impl fmt::Display for MainMenu {
             }
             Self::Help => write!(f, "Help           Show element descriptions"),
             Self::SaveAndExit => write!(f, "Save & exit"),
+            Self::ExitWithoutSaving => write!(f, "Exit without saving"),
         }
     }
 }
@@ -445,20 +447,42 @@ pub fn run_config_menu(env: &Env) -> Result<()> {
         RenderConfig::default_colored().with_canceled_prompt_indicator(Styled::new("")),
     );
 
-    let mut config = StatuslineConfig::load_strict(env)?;
+    let saved = StatuslineConfig::load_strict(env)?;
+    let mut config = saved.clone();
 
     loop {
         clear_screen();
 
+        let dirty = config != saved;
+        let title = if dirty {
+            "Configure statusline (unsaved changes):"
+        } else {
+            "Configure statusline:"
+        };
         let menu = vec![
             MainMenu::Elements,
             MainMenu::Thresholds,
             MainMenu::Help,
             MainMenu::SaveAndExit,
+            MainMenu::ExitWithoutSaving,
         ];
 
-        let Some(choice) = Select::new("Configure statusline:", menu).prompt_skippable()? else {
-            break;
+        let choice = Select::new(title, menu)
+            .with_help_message("↑↓ to move, enter to open, esc to exit")
+            .prompt_skippable()?;
+
+        let choice = match choice {
+            Some(choice) => choice,
+            None if !dirty => break,
+            None => match Confirm::new("Save changes before exiting?")
+                .with_default(true)
+                .with_help_message("esc to return to the menu")
+                .prompt_skippable()?
+            {
+                Some(true) => MainMenu::SaveAndExit,
+                Some(false) => MainMenu::ExitWithoutSaving,
+                None => continue,
+            },
         };
 
         match choice {
@@ -481,6 +505,7 @@ pub fn run_config_menu(env: &Env) -> Result<()> {
                 );
                 break;
             }
+            MainMenu::ExitWithoutSaving => break,
         }
     }
 
@@ -518,6 +543,9 @@ fn configure_elements(config: &mut StatuslineConfig) -> Result<()> {
     let Some(selected) = MultiSelect::new("Select elements to display:", options)
         .with_default(&default_indices)
         .with_page_size(16)
+        .with_help_message(
+            "↑↓ to move, space to toggle, → to all, ← to none, type to filter, enter to apply, esc to discard",
+        )
         .with_formatter(&|picked| format!("{} of {} enabled", picked.len(), total))
         .raw_prompt_skippable()?
     else {
@@ -614,7 +642,10 @@ fn configure_thresholds(thresholds: &mut Thresholds) -> Result<()> {
             .collect();
         options.push("Back".to_string());
 
-        let Some(choice) = Select::new("Thresholds:", options).raw_prompt_skippable()? else {
+        let Some(choice) = Select::new("Thresholds:", options)
+            .with_help_message("↑↓ to move, enter to edit, esc to go back")
+            .raw_prompt_skippable()?
+        else {
             break;
         };
 
@@ -639,6 +670,7 @@ fn prompt_threshold(name: &str, current: u32) -> Result<Option<u32>> {
     CustomType::<u32>::new(&message)
         .with_default(current)
         .with_error_message(&error)
+        .with_help_message("enter to apply, esc to discard")
         .with_validator(|val: &u32| {
             if *val <= THRESHOLD_MAX {
                 Ok(inquire::validator::Validation::Valid)
