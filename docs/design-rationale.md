@@ -112,6 +112,17 @@ checks against, so a stdin reading may replace it only when both name the same w
 two candidates by reset time alone lets a reading of a foreign window outlast every subsequent poll,
 pinning the display until that window expires.
 
+## Every usage cache is keyed to the account
+
+Successive logins share one config directory, so a cache kept only by time serves the previous
+account's percentages to the next one. Each cache holding account-derived usage carries a
+fingerprint of the credentials that produced it.
+
+That fingerprint comes from the long-lived half of the OAuth credentials, never from the file's
+mtime or its access token, both of which move on the routine refresh that keeps a single account
+signed in. Credentials that cannot be read yield no fingerprint and match anything, keeping a
+signed-out render on the stale-fallback path rather than blanking it.
+
 ## Concurrency is the normal case
 
 Every terminal running Claude Code renders this statusline, so several processes hit the same
