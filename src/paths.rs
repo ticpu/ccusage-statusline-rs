@@ -36,16 +36,20 @@ pub struct Env {
     pub config_json_path: PathBuf,
     pub cache_dir: PathBuf,
     pub claude_paths: Vec<PathBuf>,
+    pub account: Option<String>,
 }
 
 impl Env {
     pub fn resolve() -> Result<Self> {
-        Ok(Self {
+        let mut env = Self {
             config_dir: claude_config_dir()?,
             config_json_path: claude_config_json_path()?,
             cache_dir: crate::cache::get_cache_dir()?,
             claude_paths: find_claude_paths()?,
-        })
+            account: None,
+        };
+        env.account = crate::api_usage::account_fingerprint_or_wildcard(&env);
+        Ok(env)
     }
 
     /// An environment rooted at `root`, for tests that must not read the developer's
@@ -61,7 +65,16 @@ impl Env {
             cache_dir: crate::cache::cache_dir_for(&root.join("runtime"), &config_dir)?,
             claude_paths: vec![projects],
             config_dir,
+            account: None,
         })
+    }
+
+    /// The same environment under a different account, for tests that must observe a
+    /// cache written by one being read by the other.
+    #[cfg(test)]
+    pub fn with_account(mut self, account: &str) -> Self {
+        self.account = Some(account.to_string());
+        self
     }
 
     pub fn cache_file(&self, name: &str) -> PathBuf {

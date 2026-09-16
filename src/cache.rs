@@ -16,6 +16,8 @@ struct Semaphore {
     last_output: String,
     last_update_time: u64,
     transcript_mtime: u64,
+    #[serde(default)]
+    account: Option<String>,
 }
 
 /// Create and return the cache directory `config_dir` owns under `runtime_dir`.
@@ -184,6 +186,7 @@ pub fn try_get_cached(
     cache_path: &Path,
     transcript_path: &str,
     ttl_secs: u64,
+    account: Option<&str>,
 ) -> Result<Option<String>> {
     if !cache_path.exists() {
         return Ok(None);
@@ -260,7 +263,14 @@ pub fn try_get_cached(
     };
     let is_file_modified = current_mtime != semaphore.transcript_mtime;
 
-    if is_expired || is_file_modified {
+    let is_other_account = !crate::api_usage::account_matches(
+        semaphore
+            .account
+            .as_deref(),
+        account,
+    );
+
+    if is_expired || is_file_modified || is_other_account {
         return Ok(None);
     }
 
@@ -268,7 +278,12 @@ pub fn try_get_cached(
 }
 
 /// Update cache with new output
-pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> Result<()> {
+pub fn update_cache(
+    cache_path: &Path,
+    transcript_path: &str,
+    output: &str,
+    account: Option<&str>,
+) -> Result<()> {
     // Before opening: a missing transcript aborts the write, and truncating first
     // would leave a 0-byte cache file that every later read has to reject.
     let mtime = path_mtime_secs(transcript_path)?;
@@ -285,6 +300,7 @@ pub fn update_cache(cache_path: &Path, transcript_path: &str, output: &str) -> R
         last_output: output.to_string(),
         last_update_time: now,
         transcript_mtime: mtime,
+        account: account.map(str::to_string),
     };
 
     let json = serde_json::to_string(&semaphore)?;
@@ -352,5 +368,58 @@ pub fn cleanup_stale_locks(cache_dir: &Path, ttl_secs: u64) {
         {
             warn!("Cache cleanup cannot remove {}: {:#}", path.display(), e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TTL: u64 = 3600;
+
+    /// A transcript the cache can stat, so only the account decides the outcome.
+    fn scratch_with_transcript(name: &str) -> (crate::testutil::ScratchDir, PathBuf, String) {
+        let dir = crate::paths::test_scratch_dir(name);
+        let transcript = dir.join("transcript.jsonl");
+        fs::write(&transcript, b"{}\n").unwrap();
+        let cache_path = dir.join("output.lock");
+        (
+            dir,
+            cache_path,
+            transcript
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    /// The rendered line quotes the account's percentages, so a login switch must not
+    /// serve the previous account's line for the rest of the TTL.
+    #[test]
+    fn test_cached_output_not_served_to_other_account() {
+        let (_dir, cache_path, transcript) = scratch_with_transcript("output-cache-account");
+
+        update_cache(&cache_path, &transcript, "previous line", Some("previous")).unwrap();
+
+        assert_eq!(
+            try_get_cached(&cache_path, &transcript, TTL, Some("current")).unwrap(),
+            None
+        );
+        assert_eq!(
+            try_get_cached(&cache_path, &transcript, TTL, Some("previous")).unwrap(),
+            Some("previous line".to_string())
+        );
+    }
+
+    /// A cache file written before account keying carries no account and still hits.
+    #[test]
+    fn test_cached_output_without_account_still_hits() {
+        let (_dir, cache_path, transcript) = scratch_with_transcript("output-cache-legacy");
+
+        update_cache(&cache_path, &transcript, "line", None).unwrap();
+
+        assert_eq!(
+            try_get_cached(&cache_path, &transcript, TTL, Some("current")).unwrap(),
+            Some("line".to_string())
+        );
     }
 }

@@ -143,6 +143,8 @@ fn run_piped_mode() -> Result<()> {
         statusline_config
             .cache
             .output_cache_secs,
+        env.account
+            .as_deref(),
     )? {
         println!("{}", cached);
         return Ok(());
@@ -153,7 +155,13 @@ fn run_piped_mode() -> Result<()> {
 
     // Cache update failure must not fail the process after output has been printed.
     // A missing transcript is expected (e.g. session not yet written to disk).
-    if let Err(e) = update_cache(&cache_path, &hook_data.transcript_path, &output) {
+    if let Err(e) = update_cache(
+        &cache_path,
+        &hook_data.transcript_path,
+        &output,
+        env.account
+            .as_deref(),
+    ) {
         let is_not_found = e
             .chain()
             .any(|cause| {

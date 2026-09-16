@@ -20,6 +20,8 @@ pub struct StoredRateLimitWindow {
 struct RateLimitsStore {
     five_hour: Option<StoredRateLimitWindow>,
     seven_day: Option<StoredRateLimitWindow>,
+    #[serde(default)]
+    account: Option<String>,
 }
 
 /// Supersede rule: A supersedes B iff A.resets_at > B.resets_at OR (A.resets_at == B.resets_at AND A.used_percentage >= B.used_percentage)
@@ -46,7 +48,11 @@ fn merge_window(slot: &mut Option<StoredRateLimitWindow>, new: StoredRateLimitWi
 }
 
 /// Merge stdin reading into the store, update if it supersedes
-fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Result<()> {
+fn merge_and_update_store_at(
+    stdin_limits: &RateLimits,
+    store_path: &Path,
+    account: Option<&str>,
+) -> Result<()> {
     let mut file = crate::cache::open_private_rw(store_path)?;
 
     file.lock()?;
@@ -73,7 +79,20 @@ fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Re
         RateLimitsStore::default()
     };
 
-    let mut updated = false;
+    // Unlike a parse failure, a foreign account's windows are known-wrong rather than
+    // unreadable, so dropping them loses nothing this account could have used.
+    let mut updated = if crate::api_usage::account_matches(
+        store
+            .account
+            .as_deref(),
+        account,
+    ) {
+        false
+    } else {
+        store = RateLimitsStore::default();
+        true
+    };
+    store.account = account.map(str::to_string);
 
     if let Some(five_hour) = &stdin_limits.five_hour
         && let Some(resets_at) = parse_stdin_window(five_hour.resets_at)
@@ -111,7 +130,7 @@ fn merge_and_update_store_at(stdin_limits: &RateLimits, store_path: &Path) -> Re
 }
 
 /// Read the freshest stored readings, discarding expired windows
-fn read_store_at(store_path: &Path) -> Result<RateLimitsStore> {
+fn read_store_at(store_path: &Path, account: Option<&str>) -> Result<RateLimitsStore> {
     let mut file = match File::open(store_path) {
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::NotFound => {
@@ -143,6 +162,15 @@ fn read_store_at(store_path: &Path) -> Result<RateLimitsStore> {
 
     file.unlock()?;
 
+    if !crate::api_usage::account_matches(
+        store
+            .account
+            .as_deref(),
+        account,
+    ) {
+        return Ok(RateLimitsStore::default());
+    }
+
     let now = Utc::now();
 
     if let Some(five_hour) = &store.five_hour
@@ -167,10 +195,13 @@ pub fn merge_and_get_effective_usage(
     api_usage: Option<ApiUsageData>,
 ) -> Result<Option<ApiUsageData>> {
     let store_path = env.cache_file("rate-limits-latest.json");
+    let account = env
+        .account
+        .as_deref();
     if let Some(limits) = stdin_limits {
-        merge_and_update_store_at(limits, &store_path)?;
+        merge_and_update_store_at(limits, &store_path, account)?;
     }
-    let store = read_store_at(&store_path)?;
+    let store = read_store_at(&store_path, account)?;
     Ok(merge_store_with_api_usage(&store, api_usage))
 }
 
@@ -324,6 +355,51 @@ mod tests {
         assert!(result.is_none());
     }
 
+    /// These windows expire on their own reset rather than on a refresh interval, so an
+    /// account switch is the only thing that can clear a weekly one early.
+    #[test]
+    fn test_store_from_other_account_is_discarded() {
+        let dir = crate::paths::test_scratch_dir("rate-limits-account");
+        let store_path = dir.join("rate-limits-latest.json");
+
+        let reading = RateLimits {
+            five_hour: Some(crate::types::RateLimitWindow {
+                used_percentage: 90.0,
+                resets_at: (Utc::now() + Duration::from_secs(3600)).timestamp(),
+            }),
+            seven_day: None,
+        };
+        merge_and_update_store_at(&reading, &store_path, Some("previous")).unwrap();
+
+        assert!(
+            read_store_at(&store_path, Some("current"))
+                .unwrap()
+                .five_hour
+                .is_none(),
+            "the previous account's window must not be readable"
+        );
+
+        // The merge under the new account must drop the old window rather than let the
+        // supersede rule compare across accounts.
+        let lower = RateLimits {
+            five_hour: Some(crate::types::RateLimitWindow {
+                used_percentage: 5.0,
+                resets_at: (Utc::now() + Duration::from_secs(3600)).timestamp(),
+            }),
+            seven_day: None,
+        };
+        merge_and_update_store_at(&lower, &store_path, Some("current")).unwrap();
+
+        assert_eq!(
+            read_store_at(&store_path, Some("current"))
+                .unwrap()
+                .five_hour
+                .unwrap()
+                .used_percentage,
+            5.0
+        );
+    }
+
     #[test]
     fn test_merge_all_none_api_returns_none() {
         let api = crate::testutil::ApiUsageDataBuilder::new().build();
@@ -339,6 +415,7 @@ mod tests {
                 resets_at: Utc::now() + Duration::from_secs(3600),
             }),
             seven_day: None,
+            account: None,
         };
         let result = merge_store_with_api_usage(&store, None).unwrap();
         assert_eq!(
@@ -419,13 +496,13 @@ mod tests {
         let store_path_1 = temp_dir.join("test-merge-1.json");
         let store_path_2 = temp_dir.join("test-merge-2.json");
 
-        merge_and_update_store_at(&reading_a, &store_path_1).unwrap();
-        merge_and_update_store_at(&reading_b, &store_path_1).unwrap();
-        let result_1 = read_store_at(&store_path_1).unwrap();
+        merge_and_update_store_at(&reading_a, &store_path_1, None).unwrap();
+        merge_and_update_store_at(&reading_b, &store_path_1, None).unwrap();
+        let result_1 = read_store_at(&store_path_1, None).unwrap();
 
-        merge_and_update_store_at(&reading_b, &store_path_2).unwrap();
-        merge_and_update_store_at(&reading_a, &store_path_2).unwrap();
-        let result_2 = read_store_at(&store_path_2).unwrap();
+        merge_and_update_store_at(&reading_b, &store_path_2, None).unwrap();
+        merge_and_update_store_at(&reading_a, &store_path_2, None).unwrap();
+        let result_2 = read_store_at(&store_path_2, None).unwrap();
 
         assert_eq!(
             result_1

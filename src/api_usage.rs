@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, TryLockError};
 use std::io::Read;
 use std::path::Path;
@@ -61,6 +62,8 @@ struct CacheEnvelope {
     #[serde(default)]
     consecutive_errors: u32,
     response: Option<ApiResponse>,
+    #[serde(default)]
+    account: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +76,7 @@ struct ClaudeCredentials {
 #[serde(rename_all = "camelCase")]
 struct OAuthCredentials {
     access_token: String,
+    refresh_token: Option<String>,
     subscription_type: Option<String>,
 }
 
@@ -109,6 +113,16 @@ impl ApiUsageResult {
 /// The usage document is a handful of numbers.
 const MAX_USAGE_BYTES: u64 = 1024 * 1024;
 
+/// Whether a cache entry written under `cached` may be served to `current`.
+/// An unknown account on either side matches, so a render without readable credentials
+/// still serves cached numbers rather than blanking.
+pub fn account_matches(cached: Option<&str>, current: Option<&str>) -> bool {
+    match (cached, current) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
 /// Label for the window the response reports outside limits[]
 const SONNET_BUCKET: &str = "Sonnet";
 
@@ -129,6 +143,61 @@ fn read_oauth_credentials(env: &Env) -> Result<String> {
         .claude_ai_oauth
         .map(|oauth| oauth.access_token)
         .context("No OAuth credentials found - run 'claude' to login")
+}
+
+/// Identifies the logged-in account so a cache written under one is not read under the
+/// next. `Ok(None)` means no OAuth credentials are present.
+///
+/// Derived from the refresh token, which survives the hourly access-token rotation and
+/// changes on re-login. Only the digest is ever stored or logged.
+pub fn account_fingerprint(env: &Env) -> Result<Option<String>> {
+    let Some(oauth) = read_credentials(env)?.claude_ai_oauth else {
+        return Ok(None);
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(
+        oauth
+            .refresh_token
+            .as_deref()
+            .unwrap_or(&oauth.access_token)
+            .as_bytes(),
+    );
+    hasher.update(b"\0");
+    hasher.update(
+        oauth
+            .subscription_type
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+
+    let digest = hasher.finalize();
+    Ok(Some(
+        digest
+            .iter()
+            .take(8)
+            .fold(String::with_capacity(16), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{:02x}", b);
+                s
+            }),
+    ))
+}
+
+/// The fingerprint as the caches want it: an unreadable credentials file is reported and
+/// then matches any cache entry, because a failed read must not blank the render.
+pub fn account_fingerprint_or_wildcard(env: &Env) -> Option<String> {
+    match account_fingerprint(env) {
+        Ok(fp) => fp,
+        Err(e) => {
+            warn!(
+                "account fingerprint unavailable, cache not account-keyed: {:#}",
+                e
+            );
+            None
+        }
+    }
 }
 
 pub fn get_plan_type(env: &Env) -> PlanType {
@@ -198,6 +267,16 @@ fn fetch_usage_with_lock(
             let result = read_envelope_from_file(&mut file);
             file.unlock()?;
             let envelope = result.context("Cache unavailable while another process is fetching")?;
+            anyhow::ensure!(
+                account_matches(
+                    envelope
+                        .account
+                        .as_deref(),
+                    env.account
+                        .as_deref()
+                ),
+                "cache belongs to another account"
+            );
             let response = envelope
                 .response
                 .context("Cache has no response data yet")?;
@@ -249,6 +328,17 @@ fn core_fetch_or_use_cache(
     file: &mut File,
     cache_settings: &CacheSettings,
 ) -> Result<ApiUsageData> {
+    // Dropped before the backoff check below: another account's error count would
+    // otherwise hold this one off the network with nothing of its own to show.
+    let existing = existing.filter(|e| {
+        account_matches(
+            e.account
+                .as_deref(),
+            env.account
+                .as_deref(),
+        )
+    });
+
     let errors = existing
         .as_ref()
         .map_or(0, |e| e.consecutive_errors);
@@ -278,6 +368,9 @@ fn core_fetch_or_use_cache(
             let envelope = CacheEnvelope {
                 consecutive_errors: 0,
                 response: Some(api_response),
+                account: env
+                    .account
+                    .clone(),
             };
             write_envelope_locked(file, &envelope)?;
             Ok(data)
@@ -295,6 +388,9 @@ fn core_fetch_or_use_cache(
             let mut envelope = existing.unwrap_or(CacheEnvelope {
                 consecutive_errors: 0,
                 response: None,
+                account: env
+                    .account
+                    .clone(),
             });
             envelope.consecutive_errors = envelope
                 .consecutive_errors
@@ -466,6 +562,7 @@ mod tests {
                 seven_day_sonnet: None,
                 limits: Vec::new(),
             }),
+            account: None,
         }
     }
 
@@ -473,6 +570,14 @@ mod tests {
         CacheEnvelope {
             consecutive_errors: errors,
             response: None,
+            account: None,
+        }
+    }
+
+    fn envelope_for_account(account: &str) -> CacheEnvelope {
+        CacheEnvelope {
+            account: Some(account.to_string()),
+            ..make_test_envelope(50.0, 25.0, 0)
         }
     }
 
@@ -718,6 +823,88 @@ mod tests {
                 .model_scoped
                 .is_empty()
         );
+    }
+
+    /// A cache written under one account must not be served to the next, however fresh.
+    #[test]
+    fn test_other_account_cache_is_not_served() {
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-account");
+        let env = Env::under(&cache_dir)
+            .unwrap()
+            .with_account("current");
+        let cache_path = env.cache_file("api-usage-cache.json");
+        let settings = CacheSettings::default();
+
+        write_envelope(&envelope_for_account("previous"), &cache_path).unwrap();
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&cache_path)
+            .unwrap();
+
+        // Well inside the refresh window: only the account mismatch can force a fetch,
+        // which fails here with no network and leaves no stale response to fall back on.
+        let result = core_fetch_or_use_cache(
+            &env,
+            Some(envelope_for_account("previous")),
+            Duration::from_millis(1),
+            &mut file,
+            &settings,
+        );
+
+        assert!(
+            result.is_err(),
+            "another account's fresh cache must not satisfy the read"
+        );
+    }
+
+    /// The same cache under the same account stays a hit, with no network call.
+    #[test]
+    fn test_same_account_cache_is_served() {
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-account-same");
+        let env = Env::under(&cache_dir)
+            .unwrap()
+            .with_account("current");
+        let cache_path = env.cache_file("api-usage-cache.json");
+        let settings = CacheSettings::default();
+
+        write_envelope(&envelope_for_account("current"), &cache_path).unwrap();
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&cache_path)
+            .unwrap();
+
+        let data = core_fetch_or_use_cache(
+            &env,
+            Some(envelope_for_account("current")),
+            Duration::from_millis(1),
+            &mut file,
+            &settings,
+        )
+        .expect("matching account should serve the cache");
+
+        assert!(
+            (data
+                .five_hour
+                .unwrap()
+                .percent
+                - 50.0)
+                .abs()
+                < 0.001
+        );
+    }
+
+    /// Caches predating account keying, and renders with no readable credentials, must
+    /// keep hitting rather than forcing a fetch on every statusline.
+    #[test]
+    fn test_unknown_account_matches_either_way() {
+        assert!(account_matches(None, Some("current")));
+        assert!(account_matches(Some("previous"), None));
+        assert!(account_matches(None, None));
+        assert!(!account_matches(Some("previous"), Some("current")));
     }
 
     #[test]
