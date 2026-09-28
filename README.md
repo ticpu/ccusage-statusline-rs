@@ -60,6 +60,8 @@ Each config directory gets its own cache scope, keyed on the directory name, so 
 a personal account never read each other's cached output or usage figures. Unset, it falls
 back to `~/.claude`.
 
+A config directory without its own `ccusage-statusline-config.json` uses the one in `~/.claude`, so one setup covers every account. Saving from `ccusage-statusline-rs config` writes the directory's own file, which from then on replaces the shared one. Set `CCUSAGE_CONFIG_FALLBACK=0` to use built-in defaults instead.
+
 > Two config directories whose *basenames* match (`~/a/.claude` and `~/b/.claude`) share one
 > cache scope. Give them distinct names.
 

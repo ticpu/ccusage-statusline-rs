@@ -33,6 +33,8 @@ pub fn claude_config_json_path() -> Result<PathBuf> {
 /// consulted at one point instead of from each module that needs a path.
 pub struct Env {
     pub config_dir: PathBuf,
+    /// Directory whose statusline config applies when `config_dir` has none.
+    pub fallback_config_dir: Option<PathBuf>,
     pub config_json_path: PathBuf,
     pub cache_dir: PathBuf,
     pub claude_paths: Vec<PathBuf>,
@@ -41,8 +43,10 @@ pub struct Env {
 
 impl Env {
     pub fn resolve() -> Result<Self> {
+        let config_dir = claude_config_dir()?;
         let mut env = Self {
-            config_dir: claude_config_dir()?,
+            fallback_config_dir: fallback_config_dir(&config_dir)?,
+            config_dir,
             config_json_path: claude_config_json_path()?,
             cache_dir: crate::cache::get_cache_dir()?,
             claude_paths: find_claude_paths()?,
@@ -61,6 +65,7 @@ impl Env {
         fs::create_dir_all(&projects)
             .with_context(|| format!("Failed to create {}", projects.display()))?;
         Ok(Self {
+            fallback_config_dir: None,
             config_json_path: config_dir.join(".claude.json"),
             cache_dir: crate::cache::cache_dir_for(&root.join("runtime"), &config_dir)?,
             claude_paths: vec![projects],
@@ -80,6 +85,32 @@ impl Env {
     pub fn cache_file(&self, name: &str) -> PathBuf {
         self.cache_dir
             .join(name)
+    }
+}
+
+/// `~/.claude` when `config_dir` is another directory, unless `CCUSAGE_CONFIG_FALLBACK`
+/// turns inheritance off.
+fn fallback_config_dir(config_dir: &Path) -> Result<Option<PathBuf>> {
+    let enabled = match std::env::var("CCUSAGE_CONFIG_FALLBACK") {
+        Err(_) => true,
+        Ok(value) => parse_switch(&value).unwrap_or_else(|| {
+            warn!("CCUSAGE_CONFIG_FALLBACK={value:?} is not a switch (1/0, on/off, true/false, yes/no); keeping it on");
+            true
+        }),
+    };
+    let default_dir = home_dir()?.join(".claude");
+    Ok((enabled && default_dir != config_dir).then_some(default_dir))
+}
+
+fn parse_switch(value: &str) -> Option<bool> {
+    match value
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "1" | "on" | "true" | "yes" => Some(true),
+        "0" | "off" | "false" | "no" => Some(false),
+        _ => None,
     }
 }
 
@@ -303,6 +334,14 @@ pub fn warn_skipped(path: &Path, e: &std::io::Error) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_switch() {
+        assert_eq!(parse_switch(" Off "), Some(false));
+        assert_eq!(parse_switch("0"), Some(false));
+        assert_eq!(parse_switch("yes"), Some(true));
+        assert_eq!(parse_switch("maybe"), None);
+    }
 
     #[test]
     fn test_env_under_scopes_cache_dir_by_config_name() {

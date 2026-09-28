@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 use std::io::{ErrorKind, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -318,9 +318,8 @@ impl StatuslineConfig {
             .any(|e| API_DEPENDENT_ELEMENTS.contains(e))
     }
 
-    fn config_path(env: &Env) -> PathBuf {
-        env.config_dir
-            .join("ccusage-statusline-config.json")
+    fn config_path(dir: &Path) -> PathBuf {
+        dir.join("ccusage-statusline-config.json")
     }
 
     /// Parse a config document, applying any pending schema migrations first. The flag
@@ -333,13 +332,21 @@ impl StatuslineConfig {
         Ok((config, migrated))
     }
 
-    /// Read, migrate and clamp the config file; `None` when there is none yet.
+    /// The config directory's own file, else the fallback directory's; `None` when
+    /// neither exists.
+    fn read_document(env: &Env) -> Result<Option<Document>> {
+        let own = Self::read_file(Self::config_path(&env.config_dir))?;
+        match (own, &env.fallback_config_dir) {
+            (None, Some(dir)) => Self::read_file(Self::config_path(dir)),
+            (own, _) => Ok(own),
+        }
+    }
+
+    /// Read, migrate and clamp one config file; `None` when it does not exist.
     ///
     /// Clamping belongs here rather than in one caller: the menu would otherwise show and
     /// write back the out-of-range values every render silently clamps.
-    fn read_document(env: &Env) -> Result<Option<(Self, bool)>> {
-        let path = Self::config_path(env);
-
+    fn read_file(path: PathBuf) -> Result<Option<Document>> {
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
@@ -348,11 +355,16 @@ impl StatuslineConfig {
             }
         };
 
-        let (mut config, migrated) = Self::parse_migrated(&content)?;
+        let (mut config, migrated) = Self::parse_migrated(&content)
+            .with_context(|| format!("{} is unusable", path.display()))?;
         config
             .thresholds
             .clamp_reporting();
-        Ok(Some((config, migrated)))
+        Ok(Some(Document {
+            config,
+            migrated,
+            path,
+        }))
     }
 
     /// An unusable config falls back to defaults loudly: silently reverting the whole
@@ -360,20 +372,20 @@ impl StatuslineConfig {
     pub fn load_or_default(env: &Env) -> Self {
         match Self::read_document(env) {
             Ok(None) => Self::default(),
-            Ok(Some((config, migrated))) => {
+            Ok(Some(doc)) => {
                 // A failed write leaves the file at its old schema; the migration is
                 // recomputed on every load, so the only cost is doing it again.
-                if migrated && let Err(e) = config.save(env) {
+                if doc.migrated
+                    && let Err(e) = doc
+                        .config
+                        .write_to(&doc.path)
+                {
                     warn!("config: migrated settings could not be saved: {:#}", e);
                 }
-                config
+                doc.config
             }
             Err(e) => {
-                warn!(
-                    "Config unusable ({}), using defaults: {:#}",
-                    Self::config_path(env).display(),
-                    e
-                );
+                warn!("config: using defaults: {:#}", e);
                 Self::default()
             }
         }
@@ -381,26 +393,28 @@ impl StatuslineConfig {
 
     /// Propagates instead of falling back; used in the interactive menu, where saving
     /// defaults over a config that merely failed to parse would destroy it.
-    fn load_strict(env: &Env) -> Result<Self> {
-        let document = Self::read_document(env).with_context(|| {
-            format!(
-                "{} is unusable; fix or delete it",
-                Self::config_path(env).display()
-            )
-        })?;
-        Ok(document.map_or_else(Self::default, |(config, _)| config))
+    fn load_strict(env: &Env) -> Result<Option<Document>> {
+        Self::read_document(env).context("fix or delete the config file")
     }
 
     pub fn save(&self, env: &Env) -> Result<()> {
-        let path = Self::config_path(env);
+        self.write_to(&Self::config_path(&env.config_dir))
+    }
 
+    fn write_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
 
         let content = serde_json::to_string_pretty(self)?;
-        crate::cache::write_atomic(&path, content.as_bytes())
+        crate::cache::write_atomic(path, content.as_bytes())
     }
+}
+
+struct Document {
+    config: StatuslineConfig,
+    migrated: bool,
+    path: PathBuf,
 }
 
 enum MainMenu {
@@ -451,11 +465,27 @@ pub fn run_config_menu(env: &Env) -> Result<()> {
         RenderConfig::default_colored().with_canceled_prompt_indicator(Styled::new("")),
     );
 
-    let saved = StatuslineConfig::load_strict(env)?;
+    let target = StatuslineConfig::config_path(&env.config_dir);
+    let document = StatuslineConfig::load_strict(env)?;
+    let inherited = document
+        .as_ref()
+        .map(|doc| &doc.path)
+        .filter(|path| **path != target)
+        .map(|path| {
+            format!(
+                "Inherited from {}; saving writes {}",
+                path.display(),
+                target.display()
+            )
+        });
+    let saved = document.map_or_else(StatuslineConfig::default, |doc| doc.config);
     let mut config = saved.clone();
 
     loop {
         clear_screen();
+        if let Some(notice) = &inherited {
+            println!("{notice}");
+        }
 
         let dirty = config != saved;
         let title = if dirty {
@@ -499,10 +529,7 @@ pub fn run_config_menu(env: &Env) -> Result<()> {
             }
             MainMenu::SaveAndExit => {
                 config.save(env)?;
-                println!(
-                    "\nConfiguration saved to {}",
-                    StatuslineConfig::config_path(env).display()
-                );
+                println!("\nConfiguration saved to {}", target.display());
                 println!(
                     "  Emojis: {}",
                     if config.show_emojis { "on" } else { "off" }
@@ -728,5 +755,59 @@ mod tests {
         };
         t.clamp_reporting();
         assert_eq!(t.burn_rate_show, THRESHOLD_MAX);
+    }
+
+    fn env_with_fallback(name: &str) -> (crate::testutil::ScratchDir, Env, PathBuf) {
+        let root = crate::paths::test_scratch_dir(name);
+        let mut env = Env::under(&root).unwrap();
+        let fallback = root.join("default");
+        fs::create_dir_all(&fallback).unwrap();
+        env.fallback_config_dir = Some(fallback.clone());
+        (root, env, fallback)
+    }
+
+    #[test]
+    fn test_missing_config_inherits_fallback() {
+        let (_root, env, fallback) = env_with_fallback("cfg-fallback-inherit");
+        let file = StatuslineConfig::config_path(&fallback);
+        fs::write(
+            &file,
+            r#"{"version":1,"enabled_elements":["model_effort"]}"#,
+        )
+        .unwrap();
+
+        let cfg = StatuslineConfig::load_or_default(&env);
+        assert_eq!(cfg.enabled_elements, vec![StatusElement::ModelEffort]);
+        assert!(
+            !StatuslineConfig::config_path(&env.config_dir).exists(),
+            "migrating the inherited file must not create the directory's own"
+        );
+        assert!(
+            fs::read_to_string(&file)
+                .unwrap()
+                .contains(&format!("\"version\": {CURRENT_VERSION}"))
+        );
+
+        cfg.save(&env)
+            .unwrap();
+        assert!(StatuslineConfig::config_path(&env.config_dir).exists());
+    }
+
+    #[test]
+    fn test_own_config_wins_over_fallback() {
+        let (_root, env, fallback) = env_with_fallback("cfg-fallback-own");
+        fs::write(
+            StatuslineConfig::config_path(&fallback),
+            r#"{"enabled_elements":["model_effort"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            StatuslineConfig::config_path(&env.config_dir),
+            r#"{"enabled_elements":["directory"]}"#,
+        )
+        .unwrap();
+
+        let cfg = StatuslineConfig::load_or_default(&env);
+        assert_eq!(cfg.enabled_elements, vec![StatusElement::Directory]);
     }
 }
