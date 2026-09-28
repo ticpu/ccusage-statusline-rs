@@ -23,6 +23,9 @@ pub struct HookData {
     pub context_window: Option<ContextWindowData>,
     #[serde(default)]
     pub rate_limits: Option<RateLimits>,
+    /// Absent when the model has no effort setting.
+    #[serde(default)]
+    pub effort: Option<Effort>,
 }
 
 impl HookData {
@@ -38,8 +41,14 @@ impl HookData {
             workspace,
             context_window: None,
             rate_limits: None,
+            effort: None,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Effort {
+    pub level: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -33,7 +33,7 @@ use context::calculate_context;
 use format::burn_rate::{BurnRateDisplay, format_burn_rate_component};
 use format::{
     format_api_metrics_group, format_block_info, format_context, format_directory_group,
-    format_time_remaining_5h, format_time_remaining_7d, strip_emojis,
+    format_model, format_time_remaining_5h, format_time_remaining_7d, strip_emojis,
 };
 use paths::{Env, iter_jsonl_files};
 use pricing::PricingFetcher;
@@ -365,11 +365,24 @@ fn render_elements(
     for group in groups {
         match group {
             ElementGroup::Model => {
-                let name = inputs
-                    .hook_data
-                    .model
-                    .display_name
-                    .replace(" context)", ")");
+                let hook = &inputs.hook_data;
+                let name = if enabled.contains(&StatusElement::Model) {
+                    hook.model
+                        .display_name
+                        .as_str()
+                } else {
+                    ""
+                };
+                let name = format_model(
+                    name,
+                    hook.effort
+                        .as_ref()
+                        .filter(|_| enabled.contains(&StatusElement::ModelEffort))
+                        .map(|e| {
+                            e.level
+                                .as_str()
+                        }),
+                );
                 if !name.is_empty() {
                     parts.push(format!("🤖{}", name));
                 }

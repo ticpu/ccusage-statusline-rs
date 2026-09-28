@@ -13,6 +13,22 @@ pub fn format_block_info(block: Option<&ActiveBlock>) -> String {
     }
 }
 
+/// Model name with its effort level folded into the trailing parenthetical:
+/// "Opus 5.5 (1M)" at medium renders "Opus 5.5 (1M, med)".
+pub fn format_model(name: &str, effort: Option<&str>) -> String {
+    let Some(level) = effort.filter(|l| !l.is_empty()) else {
+        return name.to_string();
+    };
+    let level = if level == "medium" { "med" } else { level };
+    if name.is_empty() {
+        return level.to_string();
+    }
+    match name.strip_suffix(')') {
+        Some(head) => format!("{head}, {level})"),
+        None => format!("{name} ({level})"),
+    }
+}
+
 /// Pick clock emoji based on hours remaining
 fn get_clock_emoji(remaining_hours: f64) -> &'static str {
     const CLOCKS: [&str; 6] = ["🕛", "🕐", "🕑", "🕒", "🕓", "🕔"];
@@ -314,6 +330,19 @@ fn format_directory(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_model_effort() {
+        assert_eq!(format_model("Opus 5.5", None), "Opus 5.5");
+        assert_eq!(format_model("Opus 5.5", Some("xhigh")), "Opus 5.5 (xhigh)");
+        assert_eq!(format_model("Opus 5.5", Some("medium")), "Opus 5.5 (med)");
+        assert_eq!(
+            format_model("Opus 5.5 (1M)", Some("max")),
+            "Opus 5.5 (1M, max)"
+        );
+        assert_eq!(format_model("", Some("high")), "high");
+        assert_eq!(format_model("", None), "");
+    }
 
     #[test]
     fn test_directory_group_halves() {

@@ -369,6 +369,7 @@ mod tests {
                 current_usage: None,
             }),
             rate_limits: None,
+            effort: None,
         };
         let root = crate::paths::test_scratch_dir("ctx-window-data");
         let env = Env::under(&root).unwrap();

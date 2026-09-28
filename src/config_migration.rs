@@ -3,11 +3,15 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 /// Schema version this binary writes. Bump with every entry added to MIGRATIONS.
-pub const CURRENT_VERSION: u64 = 2;
+pub const CURRENT_VERSION: u64 = 3;
 
 /// Entry at index N migrates a document from version N to N+1. Never reorder or drop
 /// one: a config file may sit at any version.
-const MIGRATIONS: &[fn(&mut Value)] = &[sonnet_element_to_model_scoped, git_branch_added];
+const MIGRATIONS: &[fn(&mut Value)] = &[
+    sonnet_element_to_model_scoped,
+    git_branch_added,
+    model_effort_added,
+];
 
 /// Brings a raw config document up to CURRENT_VERSION. True when it changed and the
 /// caller should persist it.
@@ -64,6 +68,9 @@ fn sonnet_element_to_model_scoped(doc: &mut Value) {
 
 /// v1 -> v2: git_branch element added, off by default; nothing to rewrite.
 fn git_branch_added(_: &mut Value) {}
+
+/// v2 -> v3: model_effort element added, off by default; nothing to rewrite.
+fn model_effort_added(_: &mut Value) {}
 
 #[cfg(test)]
 mod tests {

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub enum StatusElement {
     Model,
+    ModelEffort,
     BlockCost,
     TimeRemaining5h,
     TimeRemaining7d,
@@ -57,7 +58,7 @@ const API_DEPENDENT_ELEMENTS: &[StatusElement] = &[
 impl StatusElement {
     pub fn group(&self) -> ElementGroup {
         match self {
-            Self::Model => ElementGroup::Model,
+            Self::Model | Self::ModelEffort => ElementGroup::Model,
             Self::BlockCost => ElementGroup::BlockCost,
             Self::TimeRemaining5h => ElementGroup::TimeRemaining5h,
             Self::TimeRemaining7d => ElementGroup::TimeRemaining7d,
@@ -74,6 +75,7 @@ impl StatusElement {
     fn label(&self) -> &'static str {
         match self {
             Self::Model => "🤖 Model",
+            Self::ModelEffort => "🎚 Model effort",
             Self::BlockCost => "💰 Block cost",
             Self::TimeRemaining5h => "🕑 Time remaining (5h)",
             Self::TimeRemaining7d => "📅 Time remaining (7d)",
@@ -93,6 +95,7 @@ impl StatusElement {
     fn description(&self) -> &'static str {
         match self {
             Self::Model => "Currently active model name.",
+            Self::ModelEffort => "Effort level (low/med/high/xhigh/max), shown after the model.",
             Self::BlockCost => "Estimated cost of the current 5-hour billing block.",
             Self::TimeRemaining5h => "Time until 5-hour billing block resets.",
             Self::TimeRemaining7d => "Time until 7-day billing window resets.",
@@ -122,6 +125,7 @@ impl StatusElement {
     fn all() -> Vec<Self> {
         vec![
             Self::Model,
+            Self::ModelEffort,
             Self::BlockCost,
             Self::TimeRemaining5h,
             Self::TimeRemaining7d,
