@@ -134,6 +134,7 @@ serialized behind the cache lock.
 Read paths degrade to a cache miss rather than an error. A failed render produces no output at
 all, so any recoverable condition — a transcript deleted mid-session, an unreadable config, a
 corrupt cache — falls back to a usable value instead of propagating.
+A missing statusline config inherits the default directory's, since display settings follow the user, not the account.
 
 Diagnostics for those fallbacks go to stderr only when it is a terminal, because Claude Code
 neither shows nor discards statusline stderr predictably. That makes the interactive run the place
