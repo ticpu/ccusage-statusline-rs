@@ -32,8 +32,12 @@ struct UsageLimit {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ApiResponse {
-    five_hour: UsageLimit,
-    seven_day: UsageLimit,
+    /// Null for a window the account does not currently have, which must not cost the
+    /// windows the server did report.
+    #[serde(default)]
+    five_hour: Option<UsageLimit>,
+    #[serde(default)]
+    seven_day: Option<UsageLimit>,
     seven_day_sonnet: Option<UsageLimit>,
     /// Per-model weekly windows; the only place the server reports them now.
     #[serde(default)]
@@ -494,8 +498,14 @@ fn parse_model_scoped(api_response: &ApiResponse) -> Vec<ScopedUsageWindow> {
 
 fn parse_api_response(api_response: &ApiResponse) -> ApiUsageData {
     ApiUsageData {
-        five_hour: Some(parse_window(&api_response.five_hour)),
-        seven_day: Some(parse_window(&api_response.seven_day)),
+        five_hour: api_response
+            .five_hour
+            .as_ref()
+            .map(parse_window),
+        seven_day: api_response
+            .seven_day
+            .as_ref()
+            .map(parse_window),
         model_scoped: parse_model_scoped(api_response),
     }
 }
@@ -551,14 +561,14 @@ mod tests {
         CacheEnvelope {
             consecutive_errors: errors,
             response: Some(ApiResponse {
-                five_hour: UsageLimit {
+                five_hour: Some(UsageLimit {
                     utilization: utilization_5h,
                     resets_at: Some("2025-11-01T12:00:00Z".to_string()),
-                },
-                seven_day: UsageLimit {
+                }),
+                seven_day: Some(UsageLimit {
                     utilization: utilization_7d,
                     resets_at: Some("2025-11-02T12:00:00Z".to_string()),
-                },
+                }),
                 seven_day_sonnet: None,
                 limits: Vec::new(),
             }),
@@ -807,6 +817,38 @@ mod tests {
             })
             .collect();
         assert_eq!(scoped, vec![("Fable", 26.0), ("Sonnet", 12.0)]);
+    }
+
+    /// A null window leaves the others the server reported intact.
+    #[test]
+    fn test_null_five_hour_keeps_the_rest() {
+        let json = r#"{
+            "five_hour": null,
+            "seven_day": {"utilization": 55.0, "resets_at": "2026-11-10T07:00:00.059848+00:00"},
+            "seven_day_sonnet": null,
+            "limits": [
+                {"kind": "weekly_all", "percent": 55, "scope": null},
+                {"kind": "weekly_scoped", "percent": 34,
+                 "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}}
+            ]
+        }"#;
+        let response: ApiResponse = serde_json::from_str(json).unwrap();
+        let data = parse_api_response(&response);
+        assert!(
+            data.five_hour
+                .is_none()
+        );
+        assert_eq!(
+            data.seven_day
+                .as_ref()
+                .map(|w| w.percent),
+            Some(55.0)
+        );
+        assert_eq!(
+            data.model_scoped
+                .len(),
+            1
+        );
     }
 
     /// Caches written before limits[] was parsed must still load.
