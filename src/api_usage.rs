@@ -61,13 +61,22 @@ struct LimitModel {
     display_name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct CacheEnvelope {
     #[serde(default)]
     consecutive_errors: u32,
     response: Option<ApiResponse>,
     #[serde(default)]
     account: Option<String>,
+    /// When `response` was fetched; absent until a fetch succeeds.
+    #[serde(default)]
+    fetched_at: Option<DateTime<Utc>>,
+    /// The most recent fetch failure, cleared by the next success. A piped render's
+    /// `warn!` reaches no one, so this is what tells a failing cache from an empty one.
+    #[serde(default)]
+    last_error: Option<String>,
+    #[serde(default)]
+    last_error_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -375,6 +384,9 @@ fn core_fetch_or_use_cache(
                 account: env
                     .account
                     .clone(),
+                fetched_at: Some(Utc::now()),
+                last_error: None,
+                last_error_at: None,
             };
             write_envelope_locked(file, &envelope)?;
             Ok(data)
@@ -395,10 +407,15 @@ fn core_fetch_or_use_cache(
                 account: env
                     .account
                     .clone(),
+                fetched_at: None,
+                last_error: None,
+                last_error_at: None,
             });
             envelope.consecutive_errors = envelope
                 .consecutive_errors
                 .saturating_add(1);
+            envelope.last_error = Some(format!("{:#}", fetch_err));
+            envelope.last_error_at = Some(Utc::now());
             let next_backoff = backoff_secs(envelope.consecutive_errors, cache_settings);
             warn!(
                 "API usage: fetch failed (attempt {}), next retry in {}s: {:#}",
@@ -572,7 +589,7 @@ mod tests {
                 seven_day_sonnet: None,
                 limits: Vec::new(),
             }),
-            account: None,
+            ..Default::default()
         }
     }
 
@@ -580,7 +597,7 @@ mod tests {
         CacheEnvelope {
             consecutive_errors: errors,
             response: None,
-            account: None,
+            ..Default::default()
         }
     }
 
@@ -741,6 +758,52 @@ mod tests {
             !err.chain()
                 .any(|e| e.is::<RateLimited>()),
             "backoff-after-network-failure must not be classified as rate limited"
+        );
+    }
+
+    /// A failed fetch leaves its cause in the cache, where a piped render can be read from.
+    #[test]
+    fn test_failed_fetch_records_last_error() {
+        // No credentials under the scratch config dir, so the fetch fails offline.
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-last-error");
+        let env = Env::under(&cache_dir).unwrap();
+        let cache_path = env.cache_file("api-usage-cache.json");
+        let settings = CacheSettings::default();
+
+        let envelope = make_error_envelope(1);
+        write_envelope(&envelope, &cache_path).unwrap();
+        let mut file = crate::cache::open_private_rw(&cache_path).unwrap();
+        file.lock()
+            .unwrap();
+
+        let result = core_fetch_or_use_cache(
+            &env,
+            Some(envelope),
+            Duration::from_secs(u32::MAX.into()),
+            &mut file,
+            &settings,
+        );
+        file.unlock()
+            .unwrap();
+        assert!(result.is_err());
+
+        let written: CacheEnvelope =
+            serde_json::from_str(&fs::read_to_string(&cache_path).unwrap()).unwrap();
+        assert_eq!(written.consecutive_errors, 2);
+        assert!(
+            written
+                .last_error
+                .is_some_and(|e| !e.is_empty())
+        );
+        assert!(
+            written
+                .last_error_at
+                .is_some()
+        );
+        assert!(
+            written
+                .fetched_at
+                .is_none()
         );
     }
 
