@@ -32,8 +32,12 @@ struct UsageLimit {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ApiResponse {
-    five_hour: UsageLimit,
-    seven_day: UsageLimit,
+    /// Null for a window the account does not currently have, which must not cost the
+    /// windows the server did report.
+    #[serde(default)]
+    five_hour: Option<UsageLimit>,
+    #[serde(default)]
+    seven_day: Option<UsageLimit>,
     seven_day_sonnet: Option<UsageLimit>,
     /// Per-model weekly windows; the only place the server reports them now.
     #[serde(default)]
@@ -57,13 +61,22 @@ struct LimitModel {
     display_name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct CacheEnvelope {
     #[serde(default)]
     consecutive_errors: u32,
     response: Option<ApiResponse>,
     #[serde(default)]
     account: Option<String>,
+    /// When `response` was fetched; absent until a fetch succeeds.
+    #[serde(default)]
+    fetched_at: Option<DateTime<Utc>>,
+    /// The most recent fetch failure, cleared by the next success. A piped render's
+    /// `warn!` reaches no one, so this is what tells a failing cache from an empty one.
+    #[serde(default)]
+    last_error: Option<String>,
+    #[serde(default)]
+    last_error_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,6 +384,9 @@ fn core_fetch_or_use_cache(
                 account: env
                     .account
                     .clone(),
+                fetched_at: Some(Utc::now()),
+                last_error: None,
+                last_error_at: None,
             };
             write_envelope_locked(file, &envelope)?;
             Ok(data)
@@ -391,10 +407,15 @@ fn core_fetch_or_use_cache(
                 account: env
                     .account
                     .clone(),
+                fetched_at: None,
+                last_error: None,
+                last_error_at: None,
             });
             envelope.consecutive_errors = envelope
                 .consecutive_errors
                 .saturating_add(1);
+            envelope.last_error = Some(format!("{:#}", fetch_err));
+            envelope.last_error_at = Some(Utc::now());
             let next_backoff = backoff_secs(envelope.consecutive_errors, cache_settings);
             warn!(
                 "API usage: fetch failed (attempt {}), next retry in {}s: {:#}",
@@ -494,8 +515,14 @@ fn parse_model_scoped(api_response: &ApiResponse) -> Vec<ScopedUsageWindow> {
 
 fn parse_api_response(api_response: &ApiResponse) -> ApiUsageData {
     ApiUsageData {
-        five_hour: Some(parse_window(&api_response.five_hour)),
-        seven_day: Some(parse_window(&api_response.seven_day)),
+        five_hour: api_response
+            .five_hour
+            .as_ref()
+            .map(parse_window),
+        seven_day: api_response
+            .seven_day
+            .as_ref()
+            .map(parse_window),
         model_scoped: parse_model_scoped(api_response),
     }
 }
@@ -551,18 +578,18 @@ mod tests {
         CacheEnvelope {
             consecutive_errors: errors,
             response: Some(ApiResponse {
-                five_hour: UsageLimit {
+                five_hour: Some(UsageLimit {
                     utilization: utilization_5h,
                     resets_at: Some("2025-11-01T12:00:00Z".to_string()),
-                },
-                seven_day: UsageLimit {
+                }),
+                seven_day: Some(UsageLimit {
                     utilization: utilization_7d,
                     resets_at: Some("2025-11-02T12:00:00Z".to_string()),
-                },
+                }),
                 seven_day_sonnet: None,
                 limits: Vec::new(),
             }),
-            account: None,
+            ..Default::default()
         }
     }
 
@@ -570,7 +597,7 @@ mod tests {
         CacheEnvelope {
             consecutive_errors: errors,
             response: None,
-            account: None,
+            ..Default::default()
         }
     }
 
@@ -734,6 +761,52 @@ mod tests {
         );
     }
 
+    /// A failed fetch leaves its cause in the cache, where a piped render can be read from.
+    #[test]
+    fn test_failed_fetch_records_last_error() {
+        // No credentials under the scratch config dir, so the fetch fails offline.
+        let cache_dir = crate::paths::test_scratch_dir("api-usage-last-error");
+        let env = Env::under(&cache_dir).unwrap();
+        let cache_path = env.cache_file("api-usage-cache.json");
+        let settings = CacheSettings::default();
+
+        let envelope = make_error_envelope(1);
+        write_envelope(&envelope, &cache_path).unwrap();
+        let mut file = crate::cache::open_private_rw(&cache_path).unwrap();
+        file.lock()
+            .unwrap();
+
+        let result = core_fetch_or_use_cache(
+            &env,
+            Some(envelope),
+            Duration::from_secs(u32::MAX.into()),
+            &mut file,
+            &settings,
+        );
+        file.unlock()
+            .unwrap();
+        assert!(result.is_err());
+
+        let written: CacheEnvelope =
+            serde_json::from_str(&fs::read_to_string(&cache_path).unwrap()).unwrap();
+        assert_eq!(written.consecutive_errors, 2);
+        assert!(
+            written
+                .last_error
+                .is_some_and(|e| !e.is_empty())
+        );
+        assert!(
+            written
+                .last_error_at
+                .is_some()
+        );
+        assert!(
+            written
+                .fetched_at
+                .is_none()
+        );
+    }
+
     /// RateLimited must survive anyhow context wrapping for the chain().any() detection
     /// in fetch_usage to work correctly.
     #[test]
@@ -807,6 +880,38 @@ mod tests {
             })
             .collect();
         assert_eq!(scoped, vec![("Fable", 26.0), ("Sonnet", 12.0)]);
+    }
+
+    /// A null window leaves the others the server reported intact.
+    #[test]
+    fn test_null_five_hour_keeps_the_rest() {
+        let json = r#"{
+            "five_hour": null,
+            "seven_day": {"utilization": 55.0, "resets_at": "2026-11-10T07:00:00.059848+00:00"},
+            "seven_day_sonnet": null,
+            "limits": [
+                {"kind": "weekly_all", "percent": 55, "scope": null},
+                {"kind": "weekly_scoped", "percent": 34,
+                 "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}}
+            ]
+        }"#;
+        let response: ApiResponse = serde_json::from_str(json).unwrap();
+        let data = parse_api_response(&response);
+        assert!(
+            data.five_hour
+                .is_none()
+        );
+        assert_eq!(
+            data.seven_day
+                .as_ref()
+                .map(|w| w.percent),
+            Some(55.0)
+        );
+        assert_eq!(
+            data.model_scoped
+                .len(),
+            1
+        );
     }
 
     /// Caches written before limits[] was parsed must still load.
