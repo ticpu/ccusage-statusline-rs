@@ -139,4 +139,6 @@ A missing statusline config inherits the default directory's, since display sett
 Diagnostics for those fallbacks go to stderr only when it is a terminal, because Claude Code
 neither shows nor discards statusline stderr predictably. That makes the interactive run the place
 a misconfiguration becomes visible, and it is why silently returning a default — rather than
-falling back loudly — leaves a user with no way to discover the problem at all.
+falling back loudly — leaves a user with no way to discover the problem at all. The usage cache
+records its last fetch error for the same reason: a failure that only ever happens piped would
+otherwise stay invisible, and a cache stuck in backoff would read the same as one never filled.
