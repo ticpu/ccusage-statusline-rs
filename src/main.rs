@@ -27,6 +27,7 @@ use anyhow::{Context, Result};
 use blocks::find_active_block;
 use burn_rate::calculate_burn_rate;
 use cache::{cleanup_stale_locks, try_get_cached, update_cache};
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use config::{ElementGroup, StatusElement};
 use context::calculate_context;
@@ -295,7 +296,7 @@ fn generate_statusline(
     let block = timing::phase("block", || {
         find_active_block(&env.claude_paths, &pricing, &env.cache_dir, five_hour_reset)
     })?;
-    let burn_rate = calculate_burn_rate(block.as_ref(), api_usage.as_ref(), thresholds);
+    let burn_rate = calculate_burn_rate(block.as_ref(), api_usage.as_ref(), thresholds, Utc::now());
     let context_info = timing::phase("context", || calculate_context(env, hook_data))?;
     let git_branch = hook_data
         .workspace

@@ -11,13 +11,13 @@ pub fn calculate_burn_rate(
     block: Option<&ActiveBlock>,
     api_usage: Option<&ApiUsageData>,
     thresholds: &Thresholds,
+    now: DateTime<Utc>,
 ) -> BurnRate {
     let block = match block {
         Some(b) => b,
         None => return BurnRate::default(),
     };
 
-    let now = Utc::now();
     let elapsed = (now - block.start_time).num_minutes() as f64;
 
     if elapsed <= 0.0 {
@@ -49,13 +49,13 @@ pub fn calculate_burn_rate(
         .five_hour
         .as_ref()
         .map_or(0.0, |w| {
-            calculate_limit_ratio(w.percent, w.resets_at, FIVE_HOUR_WINDOW_HOURS)
+            calculate_limit_ratio(w.percent, w.resets_at, FIVE_HOUR_WINDOW_HOURS, now)
         });
     let seven_day_ratio = api_usage
         .seven_day
         .as_ref()
         .map_or(0.0, |w| {
-            calculate_limit_ratio(w.percent, w.resets_at, SEVEN_DAY_WINDOW_HOURS)
+            calculate_limit_ratio(w.percent, w.resets_at, SEVEN_DAY_WINDOW_HOURS, now)
         });
 
     let show_ratio = thresholds.burn_rate_show_ratio();
@@ -100,6 +100,7 @@ fn calculate_limit_ratio(
     current_percent: f64,
     resets_at: Option<DateTime<Utc>>,
     block_duration_hours: f64,
+    now: DateTime<Utc>,
 ) -> f64 {
     if current_percent <= 0.0 || current_percent >= 100.0 {
         return 0.0;
@@ -110,7 +111,6 @@ fn calculate_limit_ratio(
         None => return 0.0,
     };
 
-    let now = Utc::now();
     let hours_until_reset = (reset_time - now).num_seconds() as f64 / 3600.0;
 
     if hours_until_reset <= 0.0 {
