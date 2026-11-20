@@ -22,6 +22,7 @@ impl ApiUsageDataBuilder {
         self.five_hour = Some(UsageWindow {
             percent,
             resets_at: None,
+            pace_per_hour: None,
         });
         self
     }
@@ -30,6 +31,7 @@ impl ApiUsageDataBuilder {
         self.five_hour = Some(UsageWindow {
             percent,
             resets_at: Some(resets_at),
+            pace_per_hour: None,
         });
         self
     }
@@ -38,6 +40,7 @@ impl ApiUsageDataBuilder {
         self.seven_day = Some(UsageWindow {
             percent,
             resets_at: None,
+            pace_per_hour: None,
         });
         self
     }

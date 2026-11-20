@@ -10,6 +10,7 @@ use std::time::Duration;
 use crate::config::CacheSettings;
 use crate::paths::Env;
 use crate::types::{ApiUsageData, PlanType, ScopedUsageWindow, UsageWindow};
+use crate::usage_pace::PaceHistory;
 use crate::warn;
 
 /// Typed marker for HTTP 429 rate-limit responses; survives anyhow context wrapping.
@@ -77,6 +78,8 @@ struct CacheEnvelope {
     last_error: Option<String>,
     #[serde(default)]
     last_error_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pace: PaceHistory,
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,7 +296,7 @@ fn fetch_usage_with_lock(
             let response = envelope
                 .response
                 .context("Cache has no response data yet")?;
-            Ok(parse_api_response(&response))
+            Ok(cached_usage(&response, &envelope.pace))
         }
         Err(TryLockError::Error(e)) => Err(e.into()),
     }
@@ -358,14 +361,12 @@ fn core_fetch_or_use_cache(
 
     if mtime_age < Duration::from_secs(backoff_secs(errors, cache_settings)) {
         // Within backoff window — return cached data without a network call
-        if let Some(response) = existing
-            .as_ref()
-            .and_then(|e| {
-                e.response
-                    .as_ref()
-            })
+        if let Some(e) = existing.as_ref()
+            && let Some(response) = e
+                .response
+                .as_ref()
         {
-            return Ok(parse_api_response(response));
+            return Ok(cached_usage(response, &e.pace));
         }
         if existing.is_some() {
             // Envelope exists but has no response: in backoff after a prior non-429 failure.
@@ -377,17 +378,13 @@ fn core_fetch_or_use_cache(
 
     match fetch_api_response(env) {
         Ok(api_response) => {
-            let data = parse_api_response(&api_response);
-            let envelope = CacheEnvelope {
-                consecutive_errors: 0,
-                response: Some(api_response),
-                account: env
-                    .account
+            let (envelope, data) = fresh_envelope(
+                existing.map(|e| e.pace),
+                api_response,
+                env.account
                     .clone(),
-                fetched_at: Some(Utc::now()),
-                last_error: None,
-                last_error_at: None,
-            };
+                Utc::now(),
+            );
             write_envelope_locked(file, &envelope)?;
             Ok(data)
         }
@@ -398,8 +395,8 @@ fn core_fetch_or_use_cache(
                 .and_then(|e| {
                     e.response
                         .as_ref()
-                })
-                .map(parse_api_response);
+                        .map(|r| cached_usage(r, &e.pace))
+                });
 
             let mut envelope = existing.unwrap_or(CacheEnvelope {
                 consecutive_errors: 0,
@@ -410,6 +407,7 @@ fn core_fetch_or_use_cache(
                 fetched_at: None,
                 last_error: None,
                 last_error_at: None,
+                pace: PaceHistory::default(),
             });
             envelope.consecutive_errors = envelope
                 .consecutive_errors
@@ -429,6 +427,37 @@ fn core_fetch_or_use_cache(
             }
         }
     }
+}
+
+/// The envelope a successful fetch stores: the new response, its usage, and the step
+/// history it extends.
+fn fresh_envelope(
+    pace: Option<PaceHistory>,
+    api_response: ApiResponse,
+    account: Option<String>,
+    now: DateTime<Utc>,
+) -> (CacheEnvelope, ApiUsageData) {
+    let mut data = parse_api_response(&api_response);
+    let mut pace = pace.unwrap_or_default();
+    pace.record(&data, now);
+    pace.apply(&mut data, now);
+    let envelope = CacheEnvelope {
+        consecutive_errors: 0,
+        response: Some(api_response),
+        account,
+        fetched_at: Some(now),
+        last_error: None,
+        last_error_at: None,
+        pace,
+    };
+    (envelope, data)
+}
+
+/// A cached response with the pace its history gives at this render.
+fn cached_usage(response: &ApiResponse, pace: &PaceHistory) -> ApiUsageData {
+    let mut usage = parse_api_response(response);
+    pace.apply(&mut usage, Utc::now());
+    usage
 }
 
 fn write_envelope_locked(file: &mut File, envelope: &CacheEnvelope) -> Result<()> {
@@ -469,6 +498,7 @@ fn parse_window(limit: &UsageLimit) -> UsageWindow {
     UsageWindow {
         percent: limit.utilization,
         resets_at,
+        pace_per_hour: None,
     }
 }
 
@@ -1010,6 +1040,44 @@ mod tests {
         assert!(account_matches(Some("previous"), None));
         assert!(account_matches(None, None));
         assert!(!account_matches(Some("previous"), Some("current")));
+    }
+
+    /// The history rides the envelope from one fetch to the next through the cache file.
+    #[test]
+    fn test_successive_fetches_build_a_pace() {
+        let t0: DateTime<Utc> = "2026-11-20T12:00:00Z"
+            .parse()
+            .unwrap();
+        let mut pace = None;
+        let mut data = None;
+        for (minutes, utilization) in [(0, 95.0), (5, 96.0), (50, 99.0)] {
+            let response = make_test_envelope(2.0, utilization, 0)
+                .response
+                .unwrap();
+            let now = t0 + chrono::TimeDelta::minutes(minutes);
+            let (envelope, usage) = fresh_envelope(pace, response, None, now);
+            let stored: CacheEnvelope =
+                serde_json::from_str(&serde_json::to_string(&envelope).unwrap()).unwrap();
+            pace = Some(stored.pace);
+            data = Some(usage);
+        }
+        assert_eq!(
+            data.unwrap()
+                .seven_day
+                .unwrap()
+                .pace_per_hour,
+            Some(4.0)
+        );
+    }
+
+    /// Caches written before the step history existed must still load.
+    #[test]
+    fn test_envelope_without_pace_loads() {
+        let json = r#"{"consecutive_errors":0,"response":{"five_hour":null,
+            "seven_day":{"utilization":21.0,"resets_at":"2026-11-22T08:59:59.868305+00:00"},
+            "seven_day_sonnet":null},"account":"0123456789abcdef"}"#;
+        let envelope: CacheEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.pace, PaceHistory::default());
     }
 
     #[test]

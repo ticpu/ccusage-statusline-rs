@@ -209,7 +209,7 @@ pub fn merge_and_get_effective_usage(
 /// precision and the stdin headers round to the second.
 const SAME_WINDOW_TOLERANCE: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
 
-fn same_window(a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
+pub(crate) fn same_window(a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
     (a - b).abs() <= SAME_WINDOW_TOLERANCE
 }
 
@@ -230,17 +230,20 @@ fn effective_window(
                     Some(UsageWindow {
                         percent: s.used_percentage,
                         resets_at: Some(s.resets_at),
+                        pace_per_hour: a.pace_per_hour,
                     })
                 }
             }
             _ => Some(UsageWindow {
                 percent: s.used_percentage,
                 resets_at: Some(s.resets_at),
+                pace_per_hour: None,
             }),
         },
         (Some(s), None) => Some(UsageWindow {
             percent: s.used_percentage,
             resets_at: Some(s.resets_at),
+            pace_per_hour: None,
         }),
         (None, Some(a)) => a
             .resets_at
@@ -445,6 +448,7 @@ mod tests {
         let api = UsageWindow {
             percent: 17.0,
             resets_at: Some(now + Duration::from_secs(4 * 3600)),
+            pace_per_hour: None,
         };
         let result = effective_window(Some(&store), Some(api), now).unwrap();
         assert_eq!(result.percent, 17.0);
@@ -461,9 +465,15 @@ mod tests {
         let api = UsageWindow {
             percent: 55.0,
             resets_at: Some(api_reset),
+            pace_per_hour: Some(4.0),
         };
         let result = effective_window(Some(&store), Some(api.clone()), now).unwrap();
         assert_eq!(result.percent, 60.0);
+        assert_eq!(
+            result.pace_per_hour,
+            Some(4.0),
+            "the pace is the endpoint's, whichever percent wins"
+        );
 
         let stale_store = StoredRateLimitWindow {
             used_percentage: 40.0,

@@ -22,6 +22,7 @@ mod testutil;
 mod timing;
 mod transcript_scan;
 mod types;
+mod usage_pace;
 
 use anyhow::{Context, Result};
 use blocks::find_active_block;

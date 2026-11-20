@@ -33,24 +33,12 @@ fn format_eta(duration: Duration) -> String {
     }
 }
 
-/// Compute ETA as reset_in scaled down by ratio (time to hit limit at current burn rate)
-fn scaled_eta(reset_in: Duration, ratio: f64) -> Duration {
-    // A zero or NaN ratio divides to infinity, which saturates to i64::MAX seconds;
-    // chrono's Duration::seconds panics on that rather than saturating.
-    if ratio.is_nan() || ratio <= 0.0 {
-        return reset_in;
-    }
-    Duration::try_seconds((reset_in.num_seconds() as f64 / ratio) as i64).unwrap_or(reset_in)
-}
-
-/// The bracketed ETA a rate display carries, empty when it is not shown or no reset
-/// time is known.
-fn eta_bracket(reset_in: Option<Duration>, ratio: f64, show: bool) -> String {
+/// The bracketed ETA a rate display carries, empty when it is not shown or not known.
+fn eta_bracket(eta: Option<Duration>, show: bool) -> String {
     if !show {
         return String::new();
     }
-    reset_in
-        .map(|reset_in| format!("[⏱{}]", format_eta(scaled_eta(reset_in, ratio))))
+    eta.map(|eta| format!("[⏱{}]", format_eta(eta)))
         .unwrap_or_default()
 }
 
@@ -137,8 +125,7 @@ fn format_rate_display(
     );
 
     let primary_eta = eta_bracket(
-        burn_rate.reset_in,
-        burn_rate.ratio,
+        burn_rate.eta,
         show_eta && burn_rate.ratio >= thresholds.burn_rate_danger_ratio(),
     );
 
@@ -150,11 +137,7 @@ fn format_rate_display(
         && burn_rate.critical_limit != LimitType::SevenDay
     {
         let pct = (burn_rate.seven_day_ratio * 100.0).round() as i32;
-        let seven_day_eta = eta_bracket(
-            burn_rate.seven_day_reset_in,
-            burn_rate.seven_day_ratio,
-            show_eta,
-        );
+        let seven_day_eta = eta_bracket(burn_rate.seven_day_eta, show_eta);
         format!(" {}{} 7d", format!("{}%", pct).red(), seven_day_eta)
     } else {
         String::new()
@@ -172,8 +155,8 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
         return Some("⏱\u{200B}limit".to_string());
     }
 
-    // Only the danger band scales the ETA by the burn ratio; the warning band shows the
-    // plain time to reset, which is what test_eta_only_table's warning-zone case guards.
+    // Only the danger band shows the time to the limit; the warning band shows the plain
+    // time to reset, which is what test_eta_only_table's warning-zone case guards.
     let tier = Tier::of(
         burn_rate.ratio,
         thresholds.burn_rate_warning_ratio(),
@@ -181,8 +164,8 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
     );
     let primary = match tier {
         Tier::Danger => burn_rate
-            .reset_in
-            .map(|reset_in| tier.paint(&format_eta(scaled_eta(reset_in, burn_rate.ratio)))),
+            .eta
+            .map(|eta| tier.paint(&format_eta(eta))),
         Tier::Warning => burn_rate
             .reset_in
             .map(|reset_in| tier.paint(&format_eta(reset_in))),
@@ -197,13 +180,8 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
         && burn_rate.critical_limit != LimitType::SevenDay
     {
         burn_rate
-            .seven_day_reset_in
-            .map(|reset_in| {
-                format!(
-                    " {} 7d",
-                    format_eta(scaled_eta(reset_in, burn_rate.seven_day_ratio)).red()
-                )
-            })
+            .seven_day_eta
+            .map(|eta| format!(" {} 7d", format_eta(eta).red()))
     } else {
         None
     };
@@ -223,20 +201,7 @@ fn format_eta_only(burn_rate: &BurnRate, thresholds: &Thresholds) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_scaled_eta_non_positive_ratio_does_not_panic() {
-        let reset_in = Duration::hours(3);
-        assert_eq!(scaled_eta(reset_in, 0.0), reset_in);
-        assert_eq!(scaled_eta(reset_in, -1.0), reset_in);
-        assert_eq!(scaled_eta(reset_in, f64::NAN), reset_in);
-        assert_eq!(scaled_eta(reset_in, f64::MIN_POSITIVE), reset_in);
-    }
-
-    #[test]
-    fn test_scaled_eta_scales_by_ratio() {
-        assert_eq!(scaled_eta(Duration::hours(4), 2.0), Duration::hours(2));
-    }
+    use crate::burn_rate::scaled_eta;
 
     #[test]
     fn test_format_eta_carries_rounded_hours() {
@@ -460,7 +425,10 @@ mod tests {
                 seven_day_ratio: case.seven_day_ratio,
                 critical_limit: case.critical_limit,
                 reset_in: Some(case.reset_in),
-                seven_day_reset_in: case.seven_day_reset_in,
+                eta: Some(scaled_eta(case.reset_in, case.ratio)),
+                seven_day_eta: case
+                    .seven_day_reset_in
+                    .map(|r| scaled_eta(r, case.seven_day_ratio)),
                 ..Default::default()
             };
             let result = rendered(&burn, PlanType::Subscription, true, true);
@@ -481,7 +449,7 @@ mod tests {
             seven_day_ratio: 0.5,
             critical_limit: LimitType::FiveHour,
             reset_in: Some(Duration::hours(3)),
-            seven_day_reset_in: Some(Duration::hours(100)),
+            eta: Some(Duration::hours(3)),
             ..Default::default()
         };
         let result = rendered(&burn, PlanType::Subscription, true, true);
@@ -498,7 +466,7 @@ mod tests {
             seven_day_ratio: 0.5,
             critical_limit: LimitType::FiveHour,
             reset_in: Some(Duration::hours(3)),
-            seven_day_reset_in: Some(Duration::hours(100)),
+            eta: Some(Duration::hours(3)),
             ..Default::default()
         };
         let result = rendered(&burn, PlanType::Subscription, true, false);
@@ -563,7 +531,10 @@ mod tests {
                 seven_day_ratio: case.seven_day_ratio,
                 critical_limit: case.critical_limit,
                 reset_in: Some(case.reset_in),
-                seven_day_reset_in: case.seven_day_reset_in,
+                eta: Some(scaled_eta(case.reset_in, case.ratio)),
+                seven_day_eta: case
+                    .seven_day_reset_in
+                    .map(|r| scaled_eta(r, case.seven_day_ratio)),
                 ..Default::default()
             };
             let result = rendered(&burn, PlanType::Subscription, false, true);
@@ -588,7 +559,7 @@ mod tests {
             seven_day_ratio: 0.5,
             critical_limit: LimitType::FiveHour,
             reset_in: Some(Duration::hours(3)),
-            seven_day_reset_in: Some(Duration::hours(100)),
+            eta: Some(Duration::hours(3)),
             ..Default::default()
         };
         let result = format_burn_rate_component(

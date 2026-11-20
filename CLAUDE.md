@@ -21,6 +21,7 @@ src/
 ├── cache.rs - Semaphore-file output cache under XDG_RUNTIME_DIR, shared cache IO
 ├── api_usage.rs - Usage endpoint client (OAuth from ~/.claude/.credentials.json)
 ├── rate_limits.rs - Merges statusline-stdin rate limits with the endpoint's windows
+├── usage_pace.rs - Utilization step history from endpoint fetches; recent pace for the ETA
 ├── claude_binary.rs - Claude Code binary detection, User-Agent
 ├── claude_update.rs - Update check (stable/latest channels)
 ├── process.rs - Subprocess run with timeout, kill and reap

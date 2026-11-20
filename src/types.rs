@@ -184,7 +184,9 @@ pub struct BurnRate {
     pub critical_limit: LimitType,
     pub is_at_limit: bool,
     pub reset_in: Option<chrono::Duration>,
-    pub seven_day_reset_in: Option<chrono::Duration>,
+    /// Time until the critical window reaches 100%.
+    pub eta: Option<chrono::Duration>,
+    pub seven_day_eta: Option<chrono::Duration>,
 }
 
 impl Default for BurnRate {
@@ -196,7 +198,8 @@ impl Default for BurnRate {
             critical_limit: LimitType::None,
             is_at_limit: false,
             reset_in: None,
-            seven_day_reset_in: None,
+            eta: None,
+            seven_day_eta: None,
         }
     }
 }
@@ -213,6 +216,9 @@ pub struct ContextInfo {
 pub struct UsageWindow {
     pub percent: f64,
     pub resets_at: Option<DateTime<Utc>>,
+    /// Recent percent per hour, from the endpoint's step history.
+    #[serde(default)]
+    pub pace_per_hour: Option<f64>,
 }
 
 /// Weekly window scoped to one model bucket, labelled by the server
