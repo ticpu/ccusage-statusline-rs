@@ -13,9 +13,9 @@ STAGE = target/package.tmp
 MAKEPKG_DIR = target/makepkg
 MAKEPKG_STAMP = $(MAKEPKG_DIR)/built.stamp
 
-.PHONY: all tarball package install clean screenshot deb deb-all
+.PHONY: all tarball arch-pkg arch-install clean screenshot deb deb-all
 
-all: package
+all: arch-pkg
 
 tarball:
 	git archive --format=tar --prefix=$(PKGNAME)-$(VERSION)/ HEAD > $(PKGNAME)-$(VERSION).tar
@@ -28,7 +28,7 @@ tarball:
 	@rm -f $(PKGNAME)-$(VERSION).tar
 	@echo "Created $(TARBALL)"
 
-package: $(MAKEPKG_STAMP)
+arch-pkg: $(MAKEPKG_STAMP)
 
 # The tracked PKGBUILD fetches the published release; this builds HEAD, so HEAD's
 # reflog is the source prerequisite. A fresh directory keeps makepkg from reusing
@@ -44,7 +44,7 @@ $(MAKEPKG_STAMP): PKGBUILD $(shell git rev-parse --git-path logs/HEAD)
 	makepkg -D $(MAKEPKG_DIR) -s --noconfirm
 	touch $@
 
-install: $(MAKEPKG_STAMP)
+arch-install: $(MAKEPKG_STAMP)
 	makepkg -D $(MAKEPKG_DIR) -i --noconfirm
 
 # Same command the release workflow runs, so a .deb built here comes off the
