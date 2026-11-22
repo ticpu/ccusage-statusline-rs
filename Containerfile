@@ -23,12 +23,14 @@ RUN rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_6
 # The Linux targets link static-pie against musl, so the binaries carry no libc
 # dependency and the build needs no EOL base image to hold a glibc symbol floor.
 # ring and mimalloc compile C. aarch64 has no musl cross gcc here, so the glibc one
-# builds it with fortify disabled: _FORTIFY_SOURCE emits glibc-only __*_chk symbols
-# that musl does not provide, and the static link fails on them.
+# builds it against glibc headers, which redirect calls to glibc-only symbols musl
+# does not provide, and the static link fails on them. Two redirects are known:
+# _FORTIFY_SOURCE emits __*_chk, so it is disabled; C23 mode, gcc 15's default,
+# turns strtol into __isoc23_strtol, so the standard is pinned to gnu17.
 ENV CC_x86_64_unknown_linux_musl=musl-gcc \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=yes" \
     CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc \
-    CFLAGS_aarch64_unknown_linux_musl="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" \
+    CFLAGS_aarch64_unknown_linux_musl="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -std=gnu17" \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=yes" \
     CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
