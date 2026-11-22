@@ -18,10 +18,6 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-          - os: ubuntu-latest
             target: x86_64-pc-windows-gnu
           - os: macos-15
             target: aarch64-apple-darwin
@@ -37,22 +33,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: clippy, rustfmt
-
-      - name: Install cross-compilation tools (x86_64 musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev pkg-config
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
-      - name: Install cross-compilation tools (aarch64 musl)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross pkg-config
-        env:
-          DEBIAN_FRONTEND: noninteractive
 
       - name: Install cross-compilation tools (windows-gnu)
         if: matrix.target == 'x86_64-pc-windows-gnu'
@@ -72,17 +52,22 @@ jobs:
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-        env:
-          CC_x86_64_unknown_linux_musl: musl-gcc
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C target-feature=+crt-static -C link-self-contained=yes
-          CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
-          # The glibc cross gcc builds the C deps for a musl target: fortify off, or
-          # _FORTIFY_SOURCE emits glibc-only __*_chk symbols musl cannot resolve.
-          CFLAGS_aarch64_unknown_linux_musl: -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C target-feature=+crt-static -C link-self-contained=yes
-          PKG_CONFIG_ALLOW_CROSS: 1
 
       - name: Run tests
         if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin'
         run: cargo test --release
+
+  # The musl targets build only through the release's Containerfile, so CI tests
+  # the toolchain and env that ship instead of a copy that drifts on the runner.
+  container:
+    name: Build container targets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Build every container target and the .deb packages
+        run: make deb-all DOCKER=docker
+
+      - name: Smoke-test binary
+        run: ./dist/ccusage-statusline-rs-linux-x86_64 --version
