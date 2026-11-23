@@ -6,7 +6,6 @@ rust-version = "1.89"
 description = "Claude Code statusline: reconstructs usage from local transcripts, merges it with the claude.ai usage endpoint, renders one line"
 license = "MIT"
 repository = "https://github.com/ticpu/ccusage-statusline-rs"
-homepage = "https://github.com/ticpu/ccusage-statusline-rs"
 readme = "README.md"
 keywords = ["claude", "claude-code", "statusline", "usage", "cli"]
 categories = ["command-line-utilities", "development-tools"]
