@@ -6,6 +6,10 @@
 //! window's recent pace (see usage_pace.rs). The mean serves the ETA only when no recent
 //! pace is known, since idle time dilutes it: on a 7-day window it put the limit four
 //! times further away than it was.
+//!
+//! The 7-day ETA is capped by the 5-hour limit: a 5-hour window at 100% stops 7-day
+//! consumption until it resets, so a 7-day pace measured during a burst cannot be
+//! sustained past it.
 
 use crate::config::Thresholds;
 use crate::types::{ActiveBlock, ApiUsageData, BurnRate, LimitType, UsageWindow};
@@ -88,8 +92,13 @@ pub fn calculate_burn_rate(
     let reset_in = window
         .and_then(|w| w.resets_at)
         .map(|reset| reset - now);
-    let eta = window.and_then(|w| time_to_limit(w, ratio, now));
-    let seven_day_eta = seven_day.and_then(|w| time_to_limit(w, seven_day_ratio, now));
+    let seven_day_eta =
+        seven_day.and_then(|w| seven_day_time_to_limit(w, five_hour, seven_day_ratio, now));
+    let eta = if critical_limit == LimitType::SevenDay {
+        seven_day_eta
+    } else {
+        window.and_then(|w| time_to_limit(w, ratio, now))
+    };
 
     BurnRate {
         cost_per_hour,
@@ -114,6 +123,59 @@ fn time_to_limit(window: &UsageWindow, ratio: f64, now: DateTime<Utc>) -> Option
         }
         _ => Some(scaled_eta(reset_in, ratio)),
     }
+}
+
+/// Time until `seven_day` reaches 100% at its recent pace, pausing whenever `five_hour`
+/// is at its limit. Assumes use resumes at each 5-hour reset, so it is a lower bound.
+/// Without both paces and the 5-hour reset there is no gate to apply.
+fn seven_day_time_to_limit(
+    seven_day: &UsageWindow,
+    five_hour: Option<&UsageWindow>,
+    ratio: f64,
+    now: DateTime<Utc>,
+) -> Option<Duration> {
+    let ungated = time_to_limit(seven_day, ratio, now);
+    let (Some(pace7), Some(five_hour)) = (positive_pace(seven_day), five_hour) else {
+        return ungated;
+    };
+    let (Some(pace5), Some(reset5)) = (positive_pace(five_hour), five_hour.resets_at) else {
+        return ungated;
+    };
+    seven_day.resets_at?;
+    let hours = gated_hours(
+        (100.0 - seven_day.percent).max(0.0),
+        pace7,
+        (100.0 - five_hour.percent).max(0.0),
+        pace5,
+        (reset5 - now).num_seconds() as f64 / 3600.0,
+    );
+    Duration::try_seconds((hours * 3600.0) as i64)
+}
+
+fn positive_pace(window: &UsageWindow) -> Option<f64> {
+    window
+        .pace_per_hour
+        .filter(|pace| *pace > 0.0)
+}
+
+/// Hours to spend `remaining` 7-day percent at `pace7` when consumption stops each time
+/// the 5-hour window, `left5` percent from its limit and resetting in `reset5_in` hours
+/// at `pace5`, reaches 100%. Each later 5-hour window opens full.
+fn gated_hours(remaining: f64, pace7: f64, left5: f64, pace5: f64, reset5_in: f64) -> f64 {
+    let reset5_in = reset5_in.max(0.0);
+    let active_now = (left5 / pace5).min(reset5_in);
+    if remaining <= active_now * pace7 {
+        return remaining / pace7;
+    }
+    let remaining = remaining - active_now * pace7;
+    let active = 100.0 / pace5;
+    if active >= FIVE_HOUR_WINDOW_HOURS {
+        return reset5_in + remaining / pace7;
+    }
+    // The last window ends at the 7-day limit, not at its reset: it counts active time only.
+    let per_window = active * pace7;
+    let full = ((remaining / per_window).ceil() - 1.0).max(0.0);
+    reset5_in + full * FIVE_HOUR_WINDOW_HOURS + (remaining - full * per_window) / pace7
 }
 
 /// Time to reset scaled down by `ratio`: when the window runs out at its mean rate.
@@ -246,5 +308,88 @@ mod tests {
     fn test_eta_without_history_is_the_window_mean() {
         let line = rendered_reported_case(false);
         assert!(line.contains("[⏱63m]"), "{line}");
+    }
+
+    /// 5h at 35% resetting in 3h29m, burning 27%/h; 7d at 10% burning 4.7%/h. The 5h
+    /// limit stops 7d use for an hour of every window, so 7d cannot run out in 19h.
+    fn rendered_gated_case(five_hour_pace: bool) -> String {
+        let now: DateTime<Utc> = "2026-11-23T16:11:00Z"
+            .parse()
+            .unwrap();
+        let reset_5h = now + TimeDelta::minutes(3 * 60 + 29);
+        let reset_7d = now + TimeDelta::hours(161);
+        let usage_at = |five, seven| ApiUsageData {
+            five_hour: Some(window(five, reset_5h)),
+            seven_day: Some(window(seven, reset_7d)),
+            model_scoped: Vec::new(),
+        };
+
+        let mut pace = PaceHistory::default();
+        for (ago, five, seven) in [(60, 7.0, 5.0), (51, 12.0, 6.0), (0, 35.0, 10.0)] {
+            pace.record(&usage_at(five, seven), now - TimeDelta::minutes(ago));
+        }
+        let mut usage = usage_at(35.0, 10.0);
+        pace.apply(&mut usage, now);
+        if !five_hour_pace {
+            usage
+                .five_hour
+                .as_mut()
+                .unwrap()
+                .pace_per_hour = None;
+        }
+
+        let block = ActiveBlock {
+            start_time: now - TimeDelta::hours(1),
+            cost_usd: 10.0,
+            hours_remaining: 4.0,
+        };
+        let thresholds = Thresholds::default();
+        let burn = calculate_burn_rate(Some(&block), Some(&usage), &thresholds, now);
+        format_burn_rate_component(
+            &burn,
+            PlanType::Subscription,
+            BurnRateDisplay::RateWithEta,
+            &thresholds,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_seven_day_eta_is_capped_by_the_five_hour_limit() {
+        let line = rendered_gated_case(true);
+        assert!(line.contains("[⏱1d1h] 7d"), "{line}");
+    }
+
+    #[test]
+    fn test_seven_day_eta_without_five_hour_pace_is_ungated() {
+        let line = rendered_gated_case(false);
+        assert!(line.contains("[⏱19h] 7d"), "{line}");
+    }
+
+    fn assert_hours(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn test_gated_hours_five_hour_never_fills() {
+        // 100% at 20%/h takes the whole 5h window, so the gate never closes.
+        assert_hours(gated_hours(90.0, 4.0, 65.0, 20.0, 3.0), 90.0 / 4.0);
+    }
+
+    #[test]
+    fn test_gated_hours_five_hour_at_limit_waits_for_reset() {
+        // Nothing until the reset in 2h, then one window of 2h active yields the 10%.
+        assert_hours(gated_hours(10.0, 5.0, 0.0, 50.0, 2.0), 4.0);
+    }
+
+    #[test]
+    fn test_gated_hours_fits_in_current_window() {
+        assert_hours(gated_hours(5.0, 5.0, 65.0, 27.0, 3.0), 1.0);
+    }
+
+    #[test]
+    fn test_gated_hours_last_window_has_no_trailing_idle() {
+        // Reset in 1h with the 5h full; two windows of 2h active yield 10% each.
+        assert_hours(gated_hours(20.0, 5.0, 0.0, 50.0, 1.0), 1.0 + 5.0 + 2.0);
     }
 }
